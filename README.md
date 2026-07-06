@@ -33,6 +33,16 @@ checks before any tool call is allowed.
    npm run demo
    ```
 
+4. Run the attack validation benchmark:
+
+   ```bash
+   npm run benchmark
+   ```
+
+   This drives the existing pipeline over the fixtures in `attacks/`, writes
+   `benchmark-report.json`, and fails if accuracy drops below 95% or any fixture
+   crashes. See [docs/benchmarking.md](docs/benchmarking.md) for details.
+
 ## Architecture diagram
 
 ![Aegis architecture](docs/aegis-architecture.svg)
