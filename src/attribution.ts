@@ -172,7 +172,7 @@ export function decideAttribution(
   sensitiveAction: boolean;
 } {
   const provenanceMatch = argumentProvenanceMatch(args, spans);
-  const canary = canaryDetection(JSON.stringify(args), canaryMap);
+  const canary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
   const policy = sensitiveActionPolicy(actionName, spans, sensitivityTable);
 
   if (canary.triggered) {

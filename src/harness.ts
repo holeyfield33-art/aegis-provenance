@@ -1,10 +1,11 @@
 import type { Receipt, Span, ModelAction, ProviderMessage } from './types.js';
-import { wrapSpan } from './ingest.js';
+import { wrapSpan, verifySpanIntegrity } from './ingest.js';
 import { assembleContext } from './assembly.js';
 import { decideAttribution } from './attribution.js';
 import { createReceipt, GENESIS_HASH } from './receipt.js';
 import { ReceiptStore } from './receipt-store.js';
-import { AegisBlockedError, AegisReceiptError, AegisAttributionError } from './types.js';
+import { getSigningKey, derivePublicKey } from './crypto/keys.js';
+import { AegisBlockedError, AegisReceiptError, AegisAttributionError, AegisVerificationError } from './types.js';
 
 export interface ModelClientResponse {
   type: 'text' | 'tool_call';
@@ -21,6 +22,8 @@ export interface HarnessOptions {
   system: string;
   userMessage: string;
   retrievedSpans: Array<{ origin: Span['origin']; content: string; meta?: Partial<Span['meta']> }>;
+  /** Already-signed spans (e.g. persisted or wire-transported). Verified before use like every other span. */
+  signedSpans?: Span[];
   tools: Array<{ name: string; description: string }>;
   modelClient: ModelClient;
   receiptStore?: ReceiptStore;
@@ -43,6 +46,18 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
     }
   } catch (cause) {
     throw new AegisReceiptError(`Failed during ingest: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+
+  if (options.signedSpans) {
+    spans.push(...options.signedSpans);
+  }
+
+  const publicKey = derivePublicKey(getSigningKey());
+  for (const span of spans) {
+    const integrity = verifySpanIntegrity(span, publicKey);
+    if (!integrity.valid) {
+      throw new AegisVerificationError(`Span verification failed, refusing to assemble context: ${integrity.reason}`);
+    }
   }
 
   const assembled = assembleContext(spans);
