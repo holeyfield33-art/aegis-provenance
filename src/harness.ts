@@ -80,7 +80,14 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
     tool_args: modelResponse.tool_args
   };
 
-  const attribution = decideAttribution(action.tool_name ?? '', action.tool_args, assembled.canaryMap, spans);
+  const attribution = decideAttribution(
+    action.tool_name ?? '',
+    action.tool_args,
+    assembled.canaryMap,
+    spans,
+    undefined,
+    modelResponse.text
+  );
   const receiptData: Omit<Receipt, 'receipt_hash'> = {
     request_id: `req-${Date.now()}`,
     ts: new Date().toISOString(),

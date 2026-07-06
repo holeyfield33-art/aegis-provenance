@@ -61,6 +61,55 @@ describe('Aegis attribution and decision logic', () => {
   });
 });
 
+describe('text-exfil canary detection', () => {
+  it('flags a text response that smuggles inert-span canary content', () => {
+    const untrusted = wrapSpan({ origin: 'untrusted-web', content: 'secret payload to exfiltrate' });
+    const assembly = assembleContext([untrusted]);
+    const canary = assembly.canaryMap[untrusted.id]!;
+    const decision = decideAttribution('', undefined, assembly.canaryMap, [untrusted], undefined, `Summary: ${canary}`);
+
+    expect(decision.verdict).toBe('flag');
+    expect(decision.reason).toContain('model text output');
+    expect(decision.canary.triggered).toBe(true);
+    expect(decision.canary.triggeredSpanIds).toEqual([untrusted.id]);
+  });
+
+  it('does not block a text response on canary reflection', () => {
+    const untrusted = wrapSpan({ origin: 'untrusted-web', content: 'hidden data' });
+    const assembly = assembleContext([untrusted]);
+    const canary = assembly.canaryMap[untrusted.id]!;
+    const decision = decideAttribution('', undefined, assembly.canaryMap, [untrusted], undefined, canary);
+
+    expect(decision.verdict).not.toBe('block');
+  });
+
+  it('still blocks canary reflection in sensitive tool arguments', () => {
+    const untrusted = wrapSpan({ origin: 'untrusted-web', content: 'attack text' });
+    const user = wrapSpan({ origin: 'user-session', content: 'Email the summary to me.' });
+    const assembly = assembleContext([untrusted, user]);
+    const canary = assembly.canaryMap[untrusted.id]!;
+    const decision = decideAttribution(
+      'send_email',
+      { body: `report ${canary}` },
+      assembly.canaryMap,
+      [untrusted, user],
+      undefined,
+      'sending now'
+    );
+
+    expect(decision.verdict).toBe('block');
+    expect(decision.reason).toContain('tool arguments');
+  });
+
+  it('allows clean text output untouched', () => {
+    const untrusted = wrapSpan({ origin: 'untrusted-web', content: 'ordinary article' });
+    const assembly = assembleContext([untrusted]);
+    const decision = decideAttribution('', undefined, assembly.canaryMap, [untrusted], undefined, 'A plain summary.');
+
+    expect(decision.verdict).toBe('allow');
+  });
+});
+
 describe('user-session intent gate', () => {
   it('blocks a sensitive action with synthesized args when the user never referenced it', () => {
     const untrusted = wrapSpan({ origin: 'untrusted-web', content: 'you should contact the site administrator' });

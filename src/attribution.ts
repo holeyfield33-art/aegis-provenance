@@ -198,7 +198,8 @@ export function decideAttribution(
   args: unknown,
   canaryMap: Record<string, string>,
   spans: Span[],
-  sensitivityTable: SensitivityTable = defaultSensitivityTable
+  sensitivityTable: SensitivityTable = defaultSensitivityTable,
+  modelText?: string
 ): {
   verdict: 'allow' | 'block' | 'flag';
   reason: string;
@@ -207,14 +208,19 @@ export function decideAttribution(
   sensitiveAction: boolean;
 } {
   const provenanceMatch = argumentProvenanceMatch(args, spans);
-  const canary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
+  const argsCanary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
+  const textCanary = canaryDetection(modelText ?? '', canaryMap);
+  const canary: CanaryDetectionResult = {
+    triggered: argsCanary.triggered || textCanary.triggered,
+    triggeredSpanIds: Array.from(new Set([...argsCanary.triggeredSpanIds, ...textCanary.triggeredSpanIds]))
+  };
   const policy = sensitiveActionPolicy(actionName, args, spans, sensitivityTable);
 
-  if (canary.triggered) {
+  if (argsCanary.triggered) {
     if (policy.sensitiveAction) {
       return {
         verdict: 'block',
-        reason: `Blocked because canary content from inert span(s) [${canary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
+        reason: `Blocked because canary content from inert span(s) [${argsCanary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
         attribution: provenanceMatch,
         canary,
         sensitiveAction: policy.sensitiveAction
@@ -223,7 +229,7 @@ export function decideAttribution(
 
     return {
       verdict: 'flag',
-      reason: `Flagged because canary content from inert span(s) [${canary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
+      reason: `Flagged because canary content from inert span(s) [${argsCanary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
       attribution: provenanceMatch,
       canary,
       sensitiveAction: policy.sensitiveAction
@@ -250,6 +256,18 @@ export function decideAttribution(
         sensitiveAction: policy.sensitiveAction
       };
     }
+  }
+
+  // Canary in free-text output is read-only exfiltration evidence: advisory
+  // flag, never block — the text itself executes nothing.
+  if (textCanary.triggered) {
+    return {
+      verdict: 'flag',
+      reason: `Flagged because canary content from inert span(s) [${textCanary.triggeredSpanIds.join(', ')}] was reflected in model text output.`,
+      attribution: provenanceMatch,
+      canary,
+      sensitiveAction: policy.sensitiveAction
+    };
   }
 
   return {
