@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
+    "benchmark": "tsx ./src/benchmark.ts",
     "demo": "tsx ./src/demo.ts demo"
   },
   "dependencies": {
