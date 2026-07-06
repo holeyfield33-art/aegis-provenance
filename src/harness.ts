@@ -72,7 +72,7 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
     span_ids: spans.map((span) => span.id),
     model_action: action,
     attribution: {
-      provenanceMatch: attribution.provenanceMatch,
+      provenanceMatch: attribution.attribution,
       canaryTriggered: attribution.canary.triggered,
       sensitiveAction: attribution.sensitiveAction
     },

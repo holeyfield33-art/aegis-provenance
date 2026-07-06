@@ -19,6 +19,13 @@ export function verifyReceiptChain(receipts: Receipt[]): { valid: boolean; inval
 
   for (let index = 0; index < receipts.length; index += 1) {
     const receipt = receipts[index];
+    if (!receipt) {
+      return {
+        valid: false,
+        invalidIndex: index,
+        message: `Receipt ${index} is missing`
+      };
+    }
     if (receipt.prev_receipt_hash !== prevHash) {
       return {
         valid: false,

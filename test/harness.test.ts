@@ -4,7 +4,7 @@ import { runAegis } from '../src/harness.js';
 class MockModelClient {
   async call() {
     return {
-      type: 'tool_call',
+      type: 'tool_call' as const,
       tool_name: 'send_email',
       tool_args: { recipient: 'admin@evil.com' }
     };

@@ -169,6 +169,7 @@ export function decideAttribution(
   reason: string;
   attribution: ProvenanceMatchResult;
   canary: CanaryDetectionResult;
+  sensitiveAction: boolean;
 } {
   const provenanceMatch = argumentProvenanceMatch(args, spans);
   const canary = canaryDetection(JSON.stringify(args), canaryMap);

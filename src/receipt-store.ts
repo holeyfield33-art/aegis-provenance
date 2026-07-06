@@ -14,7 +14,7 @@ export class ReceiptStore {
         .filter((line) => line.trim().length > 0)
         .map((line) => JSON.parse(line) as Receipt);
     } catch (error) {
-      if (error instanceof Error && ('code' in error ? (error as any).code === 'ENOENT' : false)) {
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];
       }
       throw new AegisReceiptError(`Failed to load receipts: ${error instanceof Error ? error.message : String(error)}`);
@@ -28,7 +28,8 @@ export class ReceiptStore {
       throw new AegisReceiptError(`Receipt store contains an invalid chain: ${chainCheck.message}`);
     }
 
-    const prevReceiptHash = receipts.length > 0 ? receipts[receipts.length - 1].receipt_hash : GENESIS_HASH;
+    const lastReceipt = receipts[receipts.length - 1];
+    const prevReceiptHash = lastReceipt ? lastReceipt.receipt_hash : GENESIS_HASH;
     const receipt = createReceipt({ ...receiptData, prev_receipt_hash: prevReceiptHash });
 
     try {
