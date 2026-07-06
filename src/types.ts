@@ -86,6 +86,13 @@ export class AegisBlockedError extends AegisError {
   }
 }
 
+export class AegisVerificationError extends AegisError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AegisVerificationError';
+  }
+}
+
 export class AegisSigningError extends AegisError {
   constructor(message: string) {
     super(message);

@@ -7,6 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
+    "typecheck": "tsc -b",
     "test": "vitest run",
     "benchmark": "tsx ./src/benchmark.ts",
     "demo": "tsx ./src/demo.ts demo"
@@ -16,6 +17,7 @@
     "@noble/hashes": "^1.4.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"

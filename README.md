@@ -104,16 +104,33 @@ Origin → trust mapping:
 
 The runtime never allows span content to override its origin or trust value.
 
+### Verify-on-use
+
+Before any context assembly, `runAegis` verifies every span against the
+derived Ed25519 public key: the signature must validate and the stored trust
+must equal the trust re-derived from the span's origin. A span whose trust
+field was tampered after signing (trust is derived state, not part of the
+signed payload) is rejected and the run fails closed with
+`AegisVerificationError` — the model is never called. Pre-signed spans (for
+example, persisted or wire-transported ones) can enter via the `signedSpans`
+option and pass through the same gate.
+
 ### Egress checks
 
 Aegis uses deterministic signals to decide whether a tool call is safe:
 
 - Argument provenance: if tool args originate only from inert spans, sensitive
   actions are blocked.
-- Canary detection: if a model output repeats an inert-span canary, the action is
-  blocked for sensitive tools and flagged for non-sensitive tools.
+- Canary detection: if tool arguments repeat an inert-span canary, the action
+  is blocked for sensitive tools and flagged for non-sensitive tools. If the
+  model's free-text output repeats a canary, the response is flagged
+  (advisory, never blocked) as text-exfiltration evidence.
 - Sensitive-action gate: actions like `send_email`, `http_post`, `delete_*`,
-  `transfer_*`, and permission changes require a `user-session` intent span.
+  `transfer_*`, and permission changes require user-session intent that
+  actually references the action or its arguments — an `intent:<tool_name>`
+  marker, token overlap with the action name, or an argument value appearing
+  in the user's own words. The mere presence of a user-session span is not
+  intent.
 
 ### Receipts
 

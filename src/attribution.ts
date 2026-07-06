@@ -127,8 +127,43 @@ export function canaryDetection(output: string, canaryMap: Record<string, string
   };
 }
 
+/**
+ * A user-session span expresses intent for an action only if it actually
+ * references it: an explicit `intent:<tool_name>` marker, token overlap with
+ * the action name, or one of the argument values appearing in the user's own
+ * words. Mere existence of a user-session span is not intent — the harness
+ * always injects one, so an existence check can never fire.
+ */
+export function userSessionIntentMatch(actionName: string, args: unknown, spans: Span[]): boolean {
+  const userText = normalizeText(
+    spans
+      .filter((span) => span.origin === 'user-session' && span.trust === 'actionable')
+      .map((span) => span.content)
+      .join('\n')
+  );
+  if (!userText) {
+    return false;
+  }
+
+  const lowerName = actionName.toLowerCase();
+  if (lowerName && userText.includes(`intent:${lowerName}`)) {
+    return true;
+  }
+
+  const actionTokens = lowerName.split(/[^a-z0-9]+/).filter((token) => token.length >= 3);
+  if (actionTokens.some((token) => userText.includes(token))) {
+    return true;
+  }
+
+  const argValues = extractStrings(args)
+    .map((value) => normalizeText(value))
+    .filter((value) => value.length >= 3);
+  return argValues.some((value) => userText.includes(value));
+}
+
 export function sensitiveActionPolicy(
   actionName: string,
+  args: unknown,
   spans: Span[],
   sensitivityTable: SensitivityTable = defaultSensitivityTable
 ): {
@@ -139,7 +174,7 @@ export function sensitiveActionPolicy(
 } {
   const lowerName = actionName.toLowerCase();
   const rule = sensitivityTable.rules.find((ruleItem) => ruleItem.actionPattern.test(lowerName));
-  const hasUserSessionIntent = spans.some((span) => span.origin === 'user-session');
+  const hasUserSessionIntent = userSessionIntentMatch(actionName, args, spans);
 
   if (!rule) {
     return {
@@ -163,22 +198,29 @@ export function decideAttribution(
   args: unknown,
   canaryMap: Record<string, string>,
   spans: Span[],
-  sensitivityTable: SensitivityTable = defaultSensitivityTable
+  sensitivityTable: SensitivityTable = defaultSensitivityTable,
+  modelText?: string
 ): {
   verdict: 'allow' | 'block' | 'flag';
   reason: string;
   attribution: ProvenanceMatchResult;
   canary: CanaryDetectionResult;
+  sensitiveAction: boolean;
 } {
   const provenanceMatch = argumentProvenanceMatch(args, spans);
-  const canary = canaryDetection(JSON.stringify(args), canaryMap);
-  const policy = sensitiveActionPolicy(actionName, spans, sensitivityTable);
+  const argsCanary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
+  const textCanary = canaryDetection(modelText ?? '', canaryMap);
+  const canary: CanaryDetectionResult = {
+    triggered: argsCanary.triggered || textCanary.triggered,
+    triggeredSpanIds: Array.from(new Set([...argsCanary.triggeredSpanIds, ...textCanary.triggeredSpanIds]))
+  };
+  const policy = sensitiveActionPolicy(actionName, args, spans, sensitivityTable);
 
-  if (canary.triggered) {
+  if (argsCanary.triggered) {
     if (policy.sensitiveAction) {
       return {
         verdict: 'block',
-        reason: `Blocked because canary content from inert span(s) [${canary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
+        reason: `Blocked because canary content from inert span(s) [${argsCanary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
         attribution: provenanceMatch,
         canary,
         sensitiveAction: policy.sensitiveAction
@@ -187,7 +229,7 @@ export function decideAttribution(
 
     return {
       verdict: 'flag',
-      reason: `Flagged because canary content from inert span(s) [${canary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
+      reason: `Flagged because canary content from inert span(s) [${argsCanary.triggeredSpanIds.join(', ')}] was reflected in tool arguments.`,
       attribution: provenanceMatch,
       canary,
       sensitiveAction: policy.sensitiveAction
@@ -208,12 +250,24 @@ export function decideAttribution(
     if (policy.requiresUserSession && !policy.hasUserSessionIntent) {
       return {
         verdict: 'block',
-        reason: 'Blocked because a sensitive action requires a live user-session intent span.',
+        reason: 'Blocked because a sensitive action requires user-session intent that references the action or its arguments.',
         attribution: provenanceMatch,
         canary,
         sensitiveAction: policy.sensitiveAction
       };
     }
+  }
+
+  // Canary in free-text output is read-only exfiltration evidence: advisory
+  // flag, never block — the text itself executes nothing.
+  if (textCanary.triggered) {
+    return {
+      verdict: 'flag',
+      reason: `Flagged because canary content from inert span(s) [${textCanary.triggeredSpanIds.join(', ')}] was reflected in model text output.`,
+      attribution: provenanceMatch,
+      canary,
+      sensitiveAction: policy.sensitiveAction
+    };
   }
 
   return {

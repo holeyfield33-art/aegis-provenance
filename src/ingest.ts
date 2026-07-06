@@ -1,10 +1,10 @@
 import { randomUUID } from 'crypto';
 import type { Origin, Span, SpanMeta, Trust } from './types.js';
-import { signSpan } from './crypto/signing.js';
+import { signSpan, verifySpan } from './crypto/signing.js';
 import { AegisSigningError } from './types.js';
 import { getSigningKey } from './crypto/keys.js';
 
-function deriveTrust(origin: Origin): Trust {
+export function deriveTrust(origin: Origin): Trust {
   switch (origin) {
     case 'system':
     case 'user-session':
@@ -45,4 +45,29 @@ export function wrapSpan({ origin, content, meta }: WrapSpanOptions): Span {
   } catch (cause) {
     throw new AegisSigningError(`Failed to wrap span: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
+}
+
+export interface SpanIntegrityResult {
+  valid: boolean;
+  reason?: string;
+}
+
+// Verify-on-use: the signature covers origin/source_uri/ingested_at/content,
+// but trust is derived state — it must be recomputed from origin here, never
+// read back from the stored field, or a wire-tampered span could carry an
+// escalated trust value past a valid signature.
+export function verifySpanIntegrity(span: Span, publicKey: Uint8Array): SpanIntegrityResult {
+  if (!verifySpan(span, publicKey)) {
+    return { valid: false, reason: `Span ${span.id} failed signature verification.` };
+  }
+
+  const expectedTrust = deriveTrust(span.origin);
+  if (span.trust !== expectedTrust) {
+    return {
+      valid: false,
+      reason: `Span ${span.id} trust mismatch: stored '${span.trust}', derived '${expectedTrust}' from origin '${span.origin}'.`
+    };
+  }
+
+  return { valid: true };
 }

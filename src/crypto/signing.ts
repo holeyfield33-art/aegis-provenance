@@ -4,8 +4,16 @@ import type { Receipt, Span } from '../types.js';
 
 const encoder = new TextEncoder();
 
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined || typeof value !== 'object') {
+// Must round-trip through JSON.stringify/JSON.parse: undefined-valued object
+// keys are omitted (JSON drops them on serialization) and undefined array
+// items become null (JSON.stringify's behaviour), so a receipt hashed before
+// persistence re-hashes identically after reload.
+export function stableStringify(value: unknown): string {
+  if (value === undefined) {
+    return 'null';
+  }
+
+  if (value === null || typeof value !== 'object') {
     return JSON.stringify(value);
   }
 
@@ -13,8 +21,11 @@ function stableStringify(value: unknown): string {
     return `[${value.map((item) => stableStringify(item)).join(',')}]`;
   }
 
-  const keys = Object.keys(value as Record<string, unknown>).sort();
-  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`);
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort();
+  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
   return `{${entries.join(',')}}`;
 }
 

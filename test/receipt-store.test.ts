@@ -84,9 +84,9 @@ describe('ReceiptStore', () => {
 
     const raw = await fs.readFile(storePath, 'utf8');
     const lines = raw.trim().split('\n');
-    const tampered = JSON.parse(lines[0]) as any;
+    const tampered = JSON.parse(lines[0]!) as any;
     tampered.verdict = 'block';
-    await fs.writeFile(storePath, JSON.stringify(tampered) + '\n' + lines[1] + '\n', 'utf8');
+    await fs.writeFile(storePath, JSON.stringify(tampered) + '\n' + lines[1]! + '\n', 'utf8');
 
     await expect(
       store.appendReceipt({
