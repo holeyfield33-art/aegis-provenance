@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500">
+  <style>text{font-family:Arial,Helvetica,sans-serif;font-size:14px;fill:#111} .box{fill:#f8fbff;stroke:#3b6ca8;stroke-width:2;rx:8;ry:8;} .arrow{stroke:#3b6ca8;stroke-width:2;fill:none;marker-end:url(#arrowhead);} .label{font-size:12px;fill:#0f2a48;}</style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#3b6ca8"/>
+    </marker>
+  </defs>
+  <rect x="40" y="40" width="220" height="100" class="box" />
+  <text x="150" y="70" text-anchor="middle">Application</text>
+  <text x="150" y="92" text-anchor="middle">Builds request</text>
+
+  <rect x="300" y="40" width="220" height="100" class="box" />
+  <text x="410" y="70" text-anchor="middle">Ingest</text>
+  <text x="410" y="92" text-anchor="middle">wrapSpan()</text>
+
+  <rect x="560" y="40" width="220" height="100" class="box" />
+  <text x="670" y="70" text-anchor="middle">Assemble</text>
+  <text x="670" y="92" text-anchor="middle">assembleContext()</text>
+
+  <path class="arrow" d="M260,90 L300,90" />
+  <path class="arrow" d="M520,90 L560,90" />
+
+  <rect x="300" y="190" width="220" height="100" class="box" />
+  <text x="410" y="220" text-anchor="middle">Model</text>
+  <text x="410" y="242" text-anchor="middle">API / client</text>
+
+  <path class="arrow" d="M670,90 L670,190" />
+  <path class="arrow" d="M410,290 L410,310" />
+
+  <rect x="560" y="190" width="220" height="100" class="box" />
+  <text x="670" y="220" text-anchor="middle">Attribution</text>
+  <text x="670" y="242" text-anchor="middle">decideAttribution()</text>
+
+  <path class="arrow" d="M520,240 L560,240" />
+
+  <rect x="300" y="340" width="220" height="100" class="box" />
+  <text x="410" y="370" text-anchor="middle">Receipt Store</text>
+  <text x="410" y="392" text-anchor="middle">appendReceipt()</text>
+
+  <path class="arrow" d="M670,240 L670,340" />
+  <path class="arrow" d="M410,440 L410,460" />
+
+  <rect x="40" y="340" width="220" height="100" class="box" />
+  <text x="150" y="370" text-anchor="middle">Result</text>
+  <text x="150" y="392" text-anchor="middle">allow/block/flag</text>
+
+  <path class="arrow" d="M260,390 L300,390" />
+
+  <text x="150" y="520" text-anchor="middle" class="label">Aegis enforces tool-call safety using signed spans, inert framing, and receipt auditing.</text>
+</svg>

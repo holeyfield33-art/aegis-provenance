@@ -1,0 +1,23 @@
+{
+  "name": "aegis-provenance",
+  "version": "0.1.0",
+  "description": "Provenance-enforcing context proxy for LLM inputs with signed spans, deterministic egress checks, and receipt auditing.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "demo": "tsx ./src/demo.ts demo"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^1.4.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10"
+  },
+  "license": "MIT"
+}
