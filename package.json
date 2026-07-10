@@ -21,10 +21,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "benchmark": "tsx ./src/benchmark.ts",
     "demo": "tsx ./src/demo.ts demo",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test"
   },
   "repository": {
