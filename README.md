@@ -202,13 +202,37 @@ verification fails and the store refuses to append new receipts.
 - `src/harness.ts`: Mode A entrypoint that wires ingest, assembly, model call, and
   receipt generation.
 - `src/demo.ts`: example harness run for a malicious-page scenario.
+- `src/clients/openai-compat.ts`: OpenAI-compatible `ModelClient` for real-model evaluation.
+- `src/llm-eval.ts`: real-model evaluation runner (baseline vs framed vs enforcement).
+
+## Real-model evaluation
+
+The [attack validation benchmark](docs/benchmarking.md) proves the enforcement
+layer is correct against a worst-case model surrogate. To measure how **real**
+open LLMs behave under injection — and confirm Aegis blocks every attempt they
+make — run the real-model evaluation:
+
+```bash
+export AEGIS_EVAL_API_KEY=hf_your_token_here
+npm run llm-eval
+```
+
+It drives any OpenAI-compatible endpoint (Hugging Face Inference Providers by
+default, or a local llama.cpp server) over the same attack corpus plus a benign
+corpus, under two conditions per fixture, and reports per model: **baseline ASR**
+(injectability without Aegis framing), **framed ASR** (with framing), **enforcement
+rate** (blocked / attempted — 100% by design), **benign allow rate**, and
+**format-compliance rate**. See [docs/llm-evaluation.md](docs/llm-evaluation.md)
+for the full methodology, model lineup, and the Colab (Path B) reproduction.
 
 ## Honest limitations
 
 Aegis is a runtime enforcement floor, not a substitute for secure model
 behavior. Important limits:
 
-- Attribution is an approximation, not ground-truth attention.
+- Attribution is an approximation, not ground-truth attention. The
+  [real-model evaluation](docs/llm-evaluation.md) quantifies this against actual
+  open LLMs rather than a surrogate.
 - A model may still evade exact provenance checks by paraphrasing attacker input.
 - The current implementation is Mode A only: in-process harness, no HTTP proxy.
 - Receipt persistence is file-based and intended for demo/testing.
