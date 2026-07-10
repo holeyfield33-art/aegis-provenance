@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "benchmark": "tsx ./src/benchmark.ts",
+    "llm-eval": "tsx ./src/llm-eval.ts",
     "demo": "tsx ./src/demo.ts demo",
     "prepack": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test"
