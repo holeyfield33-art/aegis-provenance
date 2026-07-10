@@ -3,3 +3,6 @@ dist/
 *.env
 *.key
 .DS_Store
+aegis-demo-receipts.log
+benchmark-report.json
+coverage/
