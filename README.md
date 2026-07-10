@@ -1,5 +1,8 @@
 # Aegis Provenance Proxy
 
+[![ci](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/ci.yml/badge.svg)](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/ci.yml)
+[![benchmark](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/benchmark.yml/badge.svg)](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/benchmark.yml)
+
 Aegis is a provenance-enforcing context proxy for LLM interactions. It wraps every
 input chunk in a signed span, marks untrusted content as inert, and makes egress
 checks before any tool call is allowed.
@@ -12,6 +15,15 @@ checks before any tool call is allowed.
 - Injects unique canary tokens into inert spans to detect hidden-instruction use.
 - Applies deterministic provenance and sensitivity checks on tool calls.
 - Emits hash-linked receipts for every request to support tamper-evident audit.
+
+## Install
+
+```bash
+npm install aegis-provenance
+```
+
+> **Note:** publishing to npm is pending. Until the package is published, use it
+> from source by cloning this repository and running `npm ci`.
 
 ## Quick start
 
@@ -50,10 +62,15 @@ checks before any tool call is allowed.
 ## Example usage
 
 ```ts
-import { runAegis } from './src/harness.js';
+import {
+  runAegis,
+  type ModelClient,
+  type ModelClientResponse,
+  type ProviderMessage
+} from 'aegis-provenance';
 
-class MockModelClient {
-  async call(messages) {
+class MockModelClient implements ModelClient {
+  async call(messages: ProviderMessage[]): Promise<ModelClientResponse> {
     return {
       type: 'tool_call',
       tool_name: 'send_email',
