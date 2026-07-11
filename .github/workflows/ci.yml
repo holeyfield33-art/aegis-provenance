@@ -18,8 +18,6 @@ jobs:
       # Vitest transpiles without typechecking, so a red build can hide
       # behind green tests — the typecheck gate closes that gap.
       - run: npm run typecheck
-      # Generate the demo receipt log the canonicalization test reads. It is a
-      # gitignored build artifact (untracked in e67fb4e), so a clean CI checkout
-      # lacks it; regenerate it here rather than committing a generated file.
-      - run: npm run demo
+      # The canonicalization test now generates the demo receipt chain in memory,
+      # so it is hermetic and no `npm run demo` pre-step is needed here.
       - run: npm test
