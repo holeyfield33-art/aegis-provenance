@@ -4,15 +4,18 @@ import path from 'path';
 import { ReceiptStore } from '../src/receipt-store.js';
 import { stableStringify } from '../src/crypto/signing.js';
 import { verifyReceiptChain } from '../src/receipt.js';
-import type { Receipt } from '../src/types.js';
+import { generateDemoReceipts } from '../src/demo.js';
 
 const storePath = path.resolve('./test-canonicalization-receipts.log');
+const demoStorePath = path.resolve('./test-canonicalization-demo-receipts.log');
 
 afterEach(async () => {
-  try {
-    await fs.unlink(storePath);
-  } catch {
-    // ignore
+  for (const p of [storePath, demoStorePath]) {
+    try {
+      await fs.unlink(p);
+    } catch {
+      // ignore
+    }
   }
 });
 
@@ -73,13 +76,10 @@ describe('canonical serialization', () => {
     expect(finalCheck.valid).toBe(true);
   });
 
-  it('demo receipt log still validates under hardened canonicalization', async () => {
-    const demoLog = path.resolve('./aegis-demo-receipts.log');
-    const raw = await fs.readFile(demoLog, 'utf8');
-    const receipts = raw
-      .split('\n')
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as Receipt);
+  it('demo receipt chain still validates under hardened canonicalization', async () => {
+    // Generate the demo receipt chain in memory using the same code path the
+    // demo runs, so this test is hermetic and needs no pre-existing artifact.
+    const receipts = await generateDemoReceipts(new ReceiptStore(demoStorePath));
 
     expect(receipts.length).toBeGreaterThan(0);
     expect(verifyReceiptChain(receipts).valid).toBe(true);
