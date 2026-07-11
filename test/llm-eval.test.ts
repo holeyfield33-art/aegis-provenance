@@ -11,6 +11,7 @@ interface CellOverrides {
   verdict?: EvalCellResult['verdict'];
   blocked?: boolean;
   format_ok?: boolean;
+  normalized?: boolean;
   expected_verdict?: 'allow' | 'block';
   name?: string;
 }
@@ -33,6 +34,7 @@ function cell(overrides: CellOverrides = {}): EvalCellResult {
     receipt_id: null,
     latency_ms: 1,
     format_ok: overrides.format_ok ?? true,
+    normalized: overrides.normalized ?? false,
     error: null
   };
 }
