@@ -1,7 +1,7 @@
 # Aegis Provenance Proxy
 
-[![ci](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/ci.yml/badge.svg)](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/ci.yml)
 [![benchmark](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/benchmark.yml/badge.svg)](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/benchmark.yml)
+[![ci](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/ci.yml/badge.svg)](https://github.com/holeyfield33-art/aegis-provenance/actions/workflows/ci.yml)
 
 Aegis is a provenance-enforcing context proxy for LLM interactions. It wraps every
 input chunk in a signed span, marks untrusted content as inert, and makes egress
