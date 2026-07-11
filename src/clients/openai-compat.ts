@@ -67,12 +67,26 @@ export interface OpenAICompatConfig {
   /** Per-request timeout in milliseconds. Defaults to 60000. */
   timeoutMs?: number;
   /**
+   * Registered tool names. Passed into `parseEnvelope` so the tolerant path can
+   * validate a normalized tool name against the real toolset. Defaults to empty
+   * (no normalization — strict envelopes only).
+   */
+  allowedTools?: Iterable<string>;
+  /**
    * Injectable fetch implementation. Defaults to the global `fetch` (Node 20+).
    * Tests pass a hand-written fake here — the repo's established mocking style
    * is constructor injection, not `vi.mock`.
    */
   fetchImpl?: typeof fetch;
 }
+
+// Task 4 (future seam, not implemented): Qwen2.5 and other newer small models
+// support OpenAI-native `tools`/`tool_choice`. The JSON envelope was chosen for
+// portability across endpoints that expose native tool-calling inconsistently.
+// A future `useNativeTools` option on `OpenAICompatConfig` could send the real
+// `tools` array and read `message.tool_calls` instead of appending
+// `ENVELOPE_INSTRUCTION` and parsing an envelope — for models that support it —
+// while leaving the envelope path as the portable default. Out of scope here.
 
 /**
  * Fixed instruction appended as a final system message. It forces the model to
@@ -119,11 +133,83 @@ export function stripCodeFences(raw: string): string {
 }
 
 /**
- * Parse a raw model completion into a `ModelClientResponse`. Pure and
- * side-effect free so it can be unit-tested directly. Throws `ModelFormatError`
- * on anything that is not a valid envelope — never coerces to a default.
+ * A `ModelClientResponse` carrying an extra, non-contract `normalized` marker.
+ * Set true when the tolerant parse path recovered a tool_call from a near-miss
+ * envelope shape (e.g. `{"type":"email"}`). The harness passes the response
+ * object through untouched, so the eval runner can read this flag off the exact
+ * response for a cell — race-free even when a client is shared across a pool.
  */
-export function parseEnvelope(raw: string): ModelClientResponse {
+export interface NormalizableResponse extends ModelClientResponse {
+  normalized?: boolean;
+}
+
+/** Result of a detailed parse: the response plus whether normalization fired. */
+export interface ParsedEnvelope {
+  response: ModelClientResponse;
+  normalized: boolean;
+}
+
+/** Split an identifier into lowercase alphanumeric tokens (e.g. send_email → {send,email}). */
+function tokenize(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length > 0)
+  );
+}
+
+function isSubset(a: Set<string>, b: Set<string>): boolean {
+  for (const token of a) {
+    if (!b.has(token)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Find the single registered tool a candidate name refers to. Exact match wins;
+ * otherwise a candidate matches a tool when their token sets are subset-related
+ * (so `email` and `email_send` both resolve to `send_email`). Returns
+ * `ambiguous` when more than one registered tool matches (e.g. `file` matches
+ * both `read_file` and `delete_file`), so the caller can refuse rather than guess.
+ */
+function findMatchingTool(candidate: string, allowed: Set<string>): { match?: string; ambiguous: boolean } {
+  if (allowed.has(candidate)) {
+    return { match: candidate, ambiguous: false };
+  }
+  const candTokens = tokenize(candidate);
+  if (candTokens.size === 0) {
+    return { ambiguous: false };
+  }
+  const matches = [...allowed].filter((name) => {
+    const toolTokens = tokenize(name);
+    return isSubset(candTokens, toolTokens) || isSubset(toolTokens, candTokens);
+  });
+  if (matches.length === 1) {
+    return { match: matches[0], ambiguous: false };
+  }
+  if (matches.length > 1) {
+    return { ambiguous: true };
+  }
+  return { ambiguous: false };
+}
+
+/**
+ * Parse a raw model completion into a `ModelClientResponse` plus a `normalized`
+ * flag. Pure and side-effect free so it can be unit-tested directly. Throws
+ * `ModelFormatError` on anything that is not a valid (or recoverable) envelope —
+ * never coerces to a default.
+ *
+ * Strict `text`/`tool_call` envelopes parse exactly as before (`normalized:false`).
+ * If `type` is neither but a non-empty string field names a registered tool —
+ * the `type` value itself, or a top-level `tool`/`action`/`name` field — and a
+ * single registered tool matches, it is normalized to a tool_call
+ * (`normalized:true`). Ambiguous matches or no match still throw: parse failure
+ * remains data.
+ */
+export function parseEnvelopeDetailed(raw: string, allowedTools?: Iterable<string>): ParsedEnvelope {
   const cleaned = stripCodeFences(raw);
   if (cleaned.length === 0) {
     throw new ModelFormatError('Model returned an empty response.', raw);
@@ -146,7 +232,7 @@ export function parseEnvelope(raw: string): ModelClientResponse {
     if (typeof content !== 'string') {
       throw new ModelFormatError('text envelope is missing a string "content" field.', raw);
     }
-    return { type: 'text', text: content };
+    return { response: { type: 'text', text: content }, normalized: false };
   }
 
   if (type === 'tool_call') {
@@ -156,10 +242,51 @@ export function parseEnvelope(raw: string): ModelClientResponse {
     }
     // tool_args is passed through as-is (unknown). It may be any JSON value;
     // downstream attribution stringifies it defensively.
-    return { type: 'tool_call', tool_name: toolName, tool_args: parsed.tool_args };
+    return { response: { type: 'tool_call', tool_name: toolName, tool_args: parsed.tool_args }, normalized: false };
+  }
+
+  // Tolerant path: recover a tool_call from a near-miss shape, but only when a
+  // single registered tool matches. Gathers candidate names from the `type`
+  // value and common top-level fields.
+  const allowed = new Set(allowedTools ?? []);
+  if (allowed.size > 0) {
+    const candidates: string[] = [];
+    if (typeof type === 'string' && type.length > 0) {
+      candidates.push(type);
+    }
+    for (const key of ['tool', 'action', 'name'] as const) {
+      const value = parsed[key];
+      if (typeof value === 'string' && value.length > 0) {
+        candidates.push(value);
+      }
+    }
+    const matched = new Set<string>();
+    let sawAmbiguous = false;
+    for (const candidate of candidates) {
+      const result = findMatchingTool(candidate, allowed);
+      if (result.ambiguous) {
+        sawAmbiguous = true;
+      }
+      if (result.match) {
+        matched.add(result.match);
+      }
+    }
+    if (!sawAmbiguous && matched.size === 1) {
+      const toolName = [...matched][0]!;
+      const toolArgs = parsed.tool_args ?? parsed.args ?? parsed.arguments ?? parsed.parameters;
+      return { response: { type: 'tool_call', tool_name: toolName, tool_args: toolArgs }, normalized: true };
+    }
   }
 
   throw new ModelFormatError(`Envelope "type" must be "text" or "tool_call", got: ${JSON.stringify(type)}`, raw);
+}
+
+/**
+ * Backward-compatible parse that returns just the `ModelClientResponse`. Passes
+ * `allowedTools` through to enable the tolerant normalization path.
+ */
+export function parseEnvelope(raw: string, allowedTools?: Iterable<string>): ModelClientResponse {
+  return parseEnvelopeDetailed(raw, allowedTools).response;
 }
 
 function parseRetryAfterMs(header: string | null): number | undefined {
@@ -184,6 +311,7 @@ export class OpenAICompatClient implements ModelClient {
   private readonly temperature: number;
   private readonly maxTokens: number;
   private readonly timeoutMs: number;
+  private readonly allowedTools: Set<string>;
   private readonly fetchImpl: typeof fetch;
 
   constructor(config: OpenAICompatConfig) {
@@ -194,6 +322,7 @@ export class OpenAICompatClient implements ModelClient {
     this.temperature = config.temperature ?? 0;
     this.maxTokens = config.maxTokens ?? 512;
     this.timeoutMs = config.timeoutMs ?? 60000;
+    this.allowedTools = new Set(config.allowedTools ?? []);
     this.fetchImpl = config.fetchImpl ?? fetch;
   }
 
@@ -253,6 +382,14 @@ export class OpenAICompatClient implements ModelClient {
       );
     }
 
-    return parseEnvelope(content);
+    const parsed = parseEnvelopeDetailed(content, this.allowedTools);
+    if (!parsed.normalized) {
+      return parsed.response;
+    }
+    // Attach the non-contract marker onto this exact response object so the eval
+    // runner can attribute normalization to this cell (harness passes it through
+    // untouched). The harness ignores the extra field.
+    const out: NormalizableResponse = { ...parsed.response, normalized: true };
+    return out;
   }
 }

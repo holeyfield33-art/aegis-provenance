@@ -5,6 +5,7 @@ import {
   ModelHttpError,
   RateLimitError,
   parseEnvelope,
+  parseEnvelopeDetailed,
   stripCodeFences
 } from '../src/clients/openai-compat.js';
 import type { ProviderMessage } from '../src/types.js';
@@ -69,6 +70,73 @@ describe('parseEnvelope', () => {
       expect(error).toBeInstanceOf(ModelFormatError);
       expect((error as ModelFormatError).raw).toBe('not json at all');
     }
+  });
+});
+
+describe('parseEnvelope tolerant normalization', () => {
+  const ALLOWED = ['send_email', 'http_post', 'delete_file', 'read_file', 'search'];
+
+  it('normalizes type:"email" to a send_email tool_call when registered', () => {
+    const result = parseEnvelopeDetailed('{"type":"email","tool_args":{"to":"a@b.example"}}', ALLOWED);
+    expect(result.response).toEqual({
+      type: 'tool_call',
+      tool_name: 'send_email',
+      tool_args: { to: 'a@b.example' }
+    });
+    expect(result.normalized).toBe(true);
+  });
+
+  it('normalizes type:"email_send" to send_email', () => {
+    expect(parseEnvelope('{"type":"email_send","tool_args":{}}', ALLOWED)).toEqual({
+      type: 'tool_call',
+      tool_name: 'send_email',
+      tool_args: {}
+    });
+  });
+
+  it('normalizes from a top-level "tool" field', () => {
+    expect(parseEnvelope('{"type":"call","tool":"read_file","args":{"path":"x"}}', ALLOWED)).toEqual({
+      type: 'tool_call',
+      tool_name: 'read_file',
+      tool_args: { path: 'x' }
+    });
+  });
+
+  it('still throws ModelFormatError on an unknown type with no registered match', () => {
+    expect(() => parseEnvelope('{"type":"frobnicate","tool_args":{}}', ALLOWED)).toThrow(ModelFormatError);
+  });
+
+  it('refuses to normalize an ambiguous candidate (file → read_file | delete_file)', () => {
+    expect(() => parseEnvelope('{"type":"file"}', ALLOWED)).toThrow(ModelFormatError);
+  });
+
+  it('does not normalize when no allowed tools are provided', () => {
+    expect(() => parseEnvelope('{"type":"email"}')).toThrow(ModelFormatError);
+  });
+
+  it('leaves strict valid envelopes unchanged and unnormalized', () => {
+    const tool = parseEnvelopeDetailed('{"type":"tool_call","tool_name":"send_email","tool_args":{}}', ALLOWED);
+    expect(tool.response).toEqual({ type: 'tool_call', tool_name: 'send_email', tool_args: {} });
+    expect(tool.normalized).toBe(false);
+
+    const text = parseEnvelopeDetailed('{"type":"text","content":"hi"}', ALLOWED);
+    expect(text.response).toEqual({ type: 'text', text: 'hi' });
+    expect(text.normalized).toBe(false);
+  });
+});
+
+describe('OpenAICompatClient normalization marker', () => {
+  it('marks a normalized response so the eval runner can record it', async () => {
+    const client = new OpenAICompatClient({
+      baseUrl: 'https://example.test/v1',
+      apiKey: 'k',
+      model: 'test-model',
+      allowedTools: ['send_email'],
+      fetchImpl: fakeFetch('{"type":"email","tool_args":{"to":"x@y.example"}}')
+    });
+    const result = (await client.call(MESSAGES)) as { normalized?: boolean };
+    expect(result).toMatchObject({ type: 'tool_call', tool_name: 'send_email' });
+    expect(result.normalized).toBe(true);
   });
 });
 
