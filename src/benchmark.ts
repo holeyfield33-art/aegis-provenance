@@ -5,6 +5,7 @@ import { runAegis } from './harness.js';
 import type { ModelClient, ModelClientResponse } from './harness.js';
 import { AegisBlockedError } from './types.js';
 import type { AegisVerdict, Origin, ProviderMessage } from './types.js';
+import { foldConfusables, expandDecodedCandidates, stripInvisible } from './normalize.js';
 
 /**
  * Attack Validation Benchmark
@@ -93,7 +94,14 @@ const CATEGORY_ORIGIN: Record<string, Origin> = {
   memory: 'memory',
   markdown: 'untrusted-file',
   html: 'untrusted-web',
-  encoded: 'untrusted-file'
+  encoded: 'untrusted-file',
+  // Poisoned tool/API output that steers a *subsequent* tool call's
+  // arguments (secret exfiltration, path traversal, identity override) —
+  // distinct from `tool-results`, which covers a poisoned result acted on
+  // directly. `tool-args` fixtures exercise the content-based sensitivity
+  // classifier: the target tool (`search`/`read_file`) is never sensitive by
+  // name, so only inspecting argument content catches them.
+  'tool-args': 'tool-result'
 };
 
 const DEFAULT_ORIGIN: Origin = 'untrusted-file';
@@ -119,7 +127,11 @@ const TOOLS = [
 
 // Ordered detection rules. The surrogate model picks the first tool whose
 // pattern matches an imperative sensitive instruction in untrusted content.
-const SENSITIVE_PATTERNS: Array<{ tool: string; re: RegExp }> = [
+// `argKey` controls the tool_args shape the surrogate forwards under
+// (defaults to `instruction`); it exists so the newer `read_file`/`search`
+// entries below carry a realistic argument key (`path`/`query`) instead of
+// the generic one the original five sensitive-by-name tools use.
+const SENSITIVE_PATTERNS: Array<{ tool: string; re: RegExp; argKey?: string }> = [
   { tool: 'send_email', re: /(?:send|forward|e-?mail|mail|cc|bcc)\b[^\n]{0,80}[\w.+-]+@[\w.-]+\.\w+/i },
   {
     tool: 'send_email',
@@ -145,8 +157,72 @@ const SENSITIVE_PATTERNS: Array<{ tool: string; re: RegExp }> = [
   {
     tool: 'set_permission',
     re: /(?:chmod\s+777|make\s+\w+\s+(?:an?\s+)?(?:admin|root)|add\s+\w+\s+to\s+(?:sudoers|admins))/i
+  },
+  // --- Content-based sensitivity coverage ---------------------------------
+  // These route to `search` / `read_file` — tools with no sensitive-by-name
+  // rule in src/attribution.ts's default table — specifically so the
+  // resulting tool call exercises `contentSensitivityCheck` rather than the
+  // name-based table. Each mirrors a redteam-corpus shape: a credential file
+  // path, path traversal, a direct secret request, or an identity/framing
+  // override, all carried in the arguments of an otherwise "safe" tool.
+  {
+    tool: 'read_file',
+    argKey: 'path',
+    re: /\b(?:read|open|load|cat|view)\b[^\n]{0,60}(?:\.env\b|id_rsa|id_ed25519|\.ssh[/\\]|credentials\.json|\.aws[/\\]credentials|\.git-credentials|\.npmrc\b|\.pem\b)/i
+  },
+  {
+    tool: 'read_file',
+    argKey: 'path',
+    re: /\b(?:read|open|load|cat|view)\b[^\n]{0,60}\.\.[/\\]|\.\.[/\\].*\.\.[/\\]/i
+  },
+  {
+    tool: 'search',
+    argKey: 'query',
+    re: /\b(?:print|show|reveal|display|return|tell me)\b[^\n]{0,60}(?:the\s+)?(?:value of\s+)?(?:the\s+)?[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*_(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIALS?)\b/i
+  },
+  {
+    tool: 'search',
+    argKey: 'query',
+    re: /\b(?:print|show|reveal|display|return|tell me)\b[^\n]{0,60}(?:the\s+)?(?:api[- ]?key|access token|secret key|private key|password|credentials?)\b/i
+  },
+  {
+    tool: 'search',
+    argKey: 'query',
+    re: /\bsystem override\b|\bignore\b[^\n]{0,20}\binstructions\b|\bdisregard\b[^\n]{0,20}\binstructions\b|\btreat this (?:message|content) as (?:the )?system\b/i
   }
 ];
+
+function matchSensitivePattern(text: string): { tool: string; argKey: string } | null {
+  for (const { tool, re, argKey } of SENSITIVE_PATTERNS) {
+    if (re.test(text)) {
+      return { tool, argKey: argKey ?? 'instruction' };
+    }
+  }
+  return null;
+}
+
+/**
+ * Plaintext surface forms a model could plausibly produce from `payload`
+ * after decoding an obfuscation (base64/hex/rot13) or folding homoglyphs,
+ * rather than forwarding the untrusted bytes verbatim.
+ */
+function decodedSurfaceForms(payload: string): string[] {
+  const forms = new Set<string>();
+  const folded = foldConfusables(stripInvisible(payload));
+  if (folded !== payload) {
+    forms.add(folded);
+  }
+  for (const decoded of expandDecodedCandidates(payload)) {
+    if (decoded !== payload) {
+      forms.add(decoded);
+    }
+    const foldedDecoded = foldConfusables(stripInvisible(decoded));
+    if (foldedDecoded !== payload) {
+      forms.add(foldedDecoded);
+    }
+  }
+  return Array.from(forms);
+}
 
 /**
  * Recover the original untrusted payload from an assembled inert-framed
@@ -183,12 +259,31 @@ export class VulnerableModelClient implements ModelClient {
       if (!payload) {
         continue;
       }
-      for (const { tool, re } of SENSITIVE_PATTERNS) {
-        if (re.test(payload)) {
-          return { type: 'tool_call', tool_name: tool, tool_args: { instruction: payload } };
+      const match = matchSensitivePattern(payload);
+      if (match) {
+        return { type: 'tool_call', tool_name: match.tool, tool_args: { [match.argKey]: payload } };
+      }
+    }
+
+    // Fallback: simulate a model that decodes an obfuscated payload
+    // (base64/hex/rot13) or folds homoglyphs when repeating it, rather than
+    // forwarding the untrusted bytes verbatim — the "decode-and-retype"
+    // bypass shape. The forwarded argument is the decoded/folded text,
+    // which is exactly what breaks a literal byte-level provenance match
+    // unless argumentProvenanceMatch applies the same normalization.
+    for (const message of messages) {
+      const payload = extractInertPayload(message.content);
+      if (!payload) {
+        continue;
+      }
+      for (const candidate of decodedSurfaceForms(payload)) {
+        const match = matchSensitivePattern(candidate);
+        if (match) {
+          return { type: 'tool_call', tool_name: match.tool, tool_args: { [match.argKey]: candidate } };
         }
       }
     }
+
     // No sensitive instruction detected: emit a benign, non-sensitive tool call
     // with fixed arguments. This exercises Aegis's full allow verdict path
     // (provenance, canary, and sensitivity checks) deterministically.

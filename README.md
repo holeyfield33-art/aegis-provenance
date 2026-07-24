@@ -51,9 +51,14 @@ npm install aegis-provenance
    npm run benchmark
    ```
 
-   This drives the existing pipeline over the fixtures in `attacks/`, writes
-   `benchmark-report.json`, and fails if accuracy drops below 95% or any fixture
-   crashes. See [docs/benchmarking.md](docs/benchmarking.md) for details.
+   This drives the existing pipeline over the fixtures in `attacks/` against a
+   **fixed, deterministic worst-case model surrogate** (not a real LLM — see
+   [docs/benchmarking.md](docs/benchmarking.md)), writes `benchmark-report.json`,
+   and fails if accuracy drops below 95% or any fixture crashes. It measures
+   Aegis's own provenance-and-sensitivity-matching logic on that surrogate, not
+   real-model injection resistance or adversarial red-team robustness — see
+   [Honest limitations](#honest-limitations) below and the
+   [real-model evaluation](docs/llm-evaluation.md) for the complementary check.
 
 ## Architecture diagram
 
@@ -148,6 +153,20 @@ Aegis uses deterministic signals to decide whether a tool call is safe:
   marker, token overlap with the action name, or an argument value appearing
   in the user's own words. The mere presence of a user-session span is not
   intent.
+- Content-based sensitivity: a tool call is also classified sensitive — and
+  held to the same user-session-intent and provenance checks above —
+  independent of its name, when its arguments contain secret/credential
+  material (environment-variable-shaped names, known API-key token shapes,
+  credential file paths), a path-traversal sequence, a direct request for
+  secret material, or an attempt to redefine the acting identity or override
+  system framing. This closes the gap where a call to an innocuous-sounding
+  tool (`search`, `read_file`) carrying exfiltration-shaped arguments would
+  otherwise never reach the checks above at all.
+- Decode/fold provenance matching: argument-to-span matching also checks
+  common decoded (base64/hex/rot13) and homoglyph-folded representations of
+  each span, so a model that decodes an obfuscated span or folds confusable
+  characters when repeating it doesn't break the byte-level link the way a
+  purely literal substring check would.
 
 ### Receipts
 
@@ -196,7 +215,11 @@ verification fails and the store refuses to append new receipts.
 - `src/crypto/*`: canonical hashing and Ed25519 signing helpers.
 - `src/ingest.ts`: creates signed spans with deterministic trust.
 - `src/assembly.ts`: builds provider messages with inert framing and canaries.
-- `src/attribution.ts`: provenance matching, canary detection, and verdict logic.
+- `src/attribution.ts`: provenance matching, canary detection, sensitive-action
+  classification (name- and content-based), and verdict logic.
+- `src/normalize.ts`: text normalization for provenance matching — invisible-
+  character stripping, homoglyph/NFKC folding, and base64/hex/rot13
+  decode-candidate expansion.
 - `src/receipt.ts`: hash-linked receipt creation and chain verification.
 - `src/receipt-store.ts`: append-only receipt persistence with chain validation.
 - `src/harness.ts`: Mode A entrypoint that wires ingest, assembly, model call, and
@@ -233,7 +256,26 @@ behavior. Important limits:
 - Attribution is an approximation, not ground-truth attention. The
   [real-model evaluation](docs/llm-evaluation.md) quantifies this against actual
   open LLMs rather than a surrogate.
-- A model may still evade exact provenance checks by paraphrasing attacker input.
+- A model may still evade exact provenance checks by paraphrasing attacker
+  input in genuinely novel wording. Decode/fold matching (see Egress checks
+  above) recovers the common case of a model **decoding** an obfuscated
+  span (base64/hex/rot13) or **folding** a fixed set of Cyrillic/Greek
+  homoglyphs when it repeats the content — this is matching known
+  transformations of the same bytes, not general semantic paraphrase.
+- Content-based sensitivity classification (secret/credential material, path
+  traversal, identity/framing override) is pattern-based against
+  representative shapes, not a semantic or exhaustive classifier — see
+  `attacks/tool-args/` and the "Sensitive-action classification" section of
+  [docs/benchmarking.md](docs/benchmarking.md) for exactly what it covers.
+- The attack validation benchmark (`npm run benchmark`) measures Aegis's own
+  provenance/sensitivity logic against a fixed, deterministic surrogate
+  model. It does not by itself constitute an adversarial red-team result, and
+  its accuracy number should not be read as a general "% of attacks blocked"
+  claim. Treat it as a regression floor: green means no known detection
+  regressed, not that novel or adaptive attacks against Aegis specifically
+  have been ruled out. Broader adversarial validation against attack corpora
+  Aegis wasn't designed against is the appropriate next step before relying
+  on it for that claim.
 - The current implementation is Mode A only: in-process harness, no HTTP proxy.
 - Receipt persistence is file-based and intended for demo/testing.
 

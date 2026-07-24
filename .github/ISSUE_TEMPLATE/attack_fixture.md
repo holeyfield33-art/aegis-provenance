@@ -19,6 +19,7 @@ Which `attacks/<category>/` does this belong to?
 - [ ] `html`
 - [ ] `markdown`
 - [ ] `memory`
+- [ ] `tool-args`
 - [ ] `tool-results`
 - [ ] `web`
 - [ ] new category (name it):

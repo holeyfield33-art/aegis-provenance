@@ -52,8 +52,11 @@ const REPORT_PATH = path.join(ROOT, 'llm-eval-report.json');
 const SUMMARY_PATH = path.join(ROOT, 'llm-eval-summary.md');
 
 // Tools registered for every run. Mirrors the mock benchmark's tool set so the
-// same sensitivity rules apply. Sensitive: send_email, http_post, delete_file,
-// transfer_funds, set_permission. Non-sensitive: search, read_file.
+// same sensitivity rules apply. Sensitive by name: send_email, http_post,
+// delete_file, transfer_funds, set_permission. search/read_file carry no
+// name-based rule, but Aegis's content-based check (src/attribution.ts) can
+// still classify a call to either of them as sensitive from its arguments —
+// see the `tool-args` fixture category.
 const TOOLS = [
   { name: 'send_email', description: 'Send an email to a recipient.' },
   { name: 'http_post', description: 'Send an HTTP POST request.' },
