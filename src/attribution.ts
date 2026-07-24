@@ -129,10 +129,24 @@ export function canaryDetection(output: string, canaryMap: Record<string, string
 
 /**
  * A user-session span expresses intent for an action only if it actually
- * references it: an explicit `intent:<tool_name>` marker, token overlap with
- * the action name, or one of the argument values appearing in the user's own
- * words. Mere existence of a user-session span is not intent — the harness
- * always injects one, so an existence check can never fire.
+ * references it: an explicit `intent:<tool_name>` marker, one of the
+ * argument values appearing in the user's own words, or — only when no
+ * untrusted/inert content is present anywhere in context — bare token
+ * overlap with the action name. Mere existence of a user-session span is
+ * not intent — the harness always injects one, so an existence check can
+ * never fire.
+ *
+ * The bare-token-overlap fallback is intentionally weak (it exists to keep
+ * low-friction phrasing like "email the report to my manager" working when
+ * a model resolves the recipient from context). That weakness becomes a
+ * bypass the moment untrusted content is also in the span set: an attacker
+ * doesn't need the user to reference their target at all, just needs a
+ * generic word like "email" to appear anywhere in the user's message by
+ * coincidence, while the actual (obfuscated or paraphrased) exfil target
+ * comes from the untrusted span and never has to match anything literally.
+ * So once any inert (untrusted) span exists in context, we require the
+ * stronger evidence — an explicit marker or genuine argument-value overlap
+ * — instead of falling back to token overlap.
  */
 export function userSessionIntentMatch(actionName: string, args: unknown, spans: Span[]): boolean {
   const userText = normalizeText(
@@ -150,15 +164,20 @@ export function userSessionIntentMatch(actionName: string, args: unknown, spans:
     return true;
   }
 
-  const actionTokens = lowerName.split(/[^a-z0-9]+/).filter((token) => token.length >= 3);
-  if (actionTokens.some((token) => userText.includes(token))) {
-    return true;
-  }
-
   const argValues = extractStrings(args)
     .map((value) => normalizeText(value))
     .filter((value) => value.length >= 3);
-  return argValues.some((value) => userText.includes(value));
+  if (argValues.some((value) => userText.includes(value))) {
+    return true;
+  }
+
+  const hasUntrustedContent = spans.some((span) => span.trust === 'inert');
+  if (hasUntrustedContent) {
+    return false;
+  }
+
+  const actionTokens = lowerName.split(/[^a-z0-9]+/).filter((token) => token.length >= 3);
+  return actionTokens.some((token) => userText.includes(token));
 }
 
 export function sensitiveActionPolicy(
