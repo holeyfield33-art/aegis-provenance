@@ -30,13 +30,20 @@ describe('attack validation benchmark', () => {
     expect(response.tool_name).toBe('search');
   });
 
-  it('meets the accuracy threshold with no crashes and is deterministic', async () => {
-    const first = await runBenchmark();
-    expect(first.crashes).toBe(0);
-    expect(first.accuracy).toBeGreaterThanOrEqual(first.min_accuracy);
-    expect(first.passed).toBe(true);
+  it(
+    'meets the accuracy threshold with no crashes and is deterministic',
+    async () => {
+      const first = await runBenchmark();
+      expect(first.crashes).toBe(0);
+      expect(first.accuracy).toBeGreaterThanOrEqual(first.min_accuracy);
+      expect(first.passed).toBe(true);
 
-    const second = await runBenchmark();
-    expect(second).toEqual(first);
-  });
+      const second = await runBenchmark();
+      expect(second).toEqual(first);
+    },
+    // Runs the full pipeline (real Ed25519 sign/verify per span) twice over
+    // the whole fixture corpus. The 5s default is too tight once cold
+    // interpreter/curve-init overhead is included, independent of corpus size.
+    30000
+  );
 });

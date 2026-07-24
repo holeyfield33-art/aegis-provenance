@@ -34,8 +34,8 @@ New attack fixtures are very welcome — they are how the corpus grows and how t
 enforcement floor gets stress-tested.
 
 Fixtures live under `attacks/<category>/*.json`. The existing categories are
-`encoded`, `html`, `markdown`, `memory`, `tool-results`, and `web`. Each file is
-a **JSON array of objects** with exactly these fields:
+`encoded`, `html`, `markdown`, `memory`, `tool-args`, `tool-results`, and `web`.
+Each file is a **JSON array of objects** with exactly these fields:
 
 ```json
 {
