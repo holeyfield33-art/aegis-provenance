@@ -65,4 +65,45 @@ describe('Aegis harness end-to-end', () => {
     expect(result.receipt.reason).toContain('model text output');
     expect(result.receipt.attribution.canaryTriggered).toBe(true);
   });
+
+  // Regression test for a crash on realistic input: a caller passing
+  // `undefined`/`null` for `system`, `userMessage`, or a retrieved span's
+  // `content` (e.g. an HTTP handler forwarding an optional field it never
+  // received) used to sail through `wrapSpan` unvalidated and crash much
+  // later with an opaque `TypeError: Cannot read properties of undefined
+  // (reading 'replace')` deep inside the provenance-matching internals,
+  // instead of failing closed with a clear, typed error at ingest time.
+  it('fails closed with a typed error instead of crashing on non-string content', async () => {
+    const model = new MockModelClient();
+
+    await expect(
+      runAegis({
+        system: undefined as unknown as string,
+        userMessage: 'hi',
+        retrievedSpans: [],
+        tools: [],
+        modelClient: model
+      })
+    ).rejects.toMatchObject({ name: 'AegisReceiptError' });
+
+    await expect(
+      runAegis({
+        system: 'sys',
+        userMessage: null as unknown as string,
+        retrievedSpans: [],
+        tools: [],
+        modelClient: model
+      })
+    ).rejects.toMatchObject({ name: 'AegisReceiptError' });
+
+    await expect(
+      runAegis({
+        system: 'sys',
+        userMessage: 'hi',
+        retrievedSpans: [{ origin: 'untrusted-web', content: undefined as unknown as string }],
+        tools: [],
+        modelClient: model
+      })
+    ).rejects.toMatchObject({ name: 'AegisReceiptError' });
+  });
 });

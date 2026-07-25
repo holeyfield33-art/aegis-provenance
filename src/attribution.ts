@@ -5,6 +5,18 @@ export interface ProvenanceMatchResult {
   inertOnly: boolean;
   actionablePresent: boolean;
   matchedSpanIds: string[];
+  /**
+   * True if at least one *individual* argument value's matches are
+   * exclusively inert spans (no actionable span also matched that same
+   * value). Unlike `inertOnly`/`actionablePresent` — which OR matches
+   * together across every argument value — this is evaluated per value, so
+   * an unrelated benign field (e.g. a "subject" that happens to share a
+   * common word with the user's message, and therefore matches an
+   * actionable span) can't mask a different field whose content is sourced
+   * only from an inert span. Callers deciding whether to block a sensitive
+   * action should use this field, not the aggregate ones.
+   */
+  anyValueInertOnly: boolean;
 }
 
 export interface CanaryDetectionResult {
@@ -98,6 +110,7 @@ export function argumentProvenanceMatch(args: unknown, spans: Span[]): Provenanc
   let actionablePresent = false;
   let matchedAny = false;
   let onlyInert = true;
+  let anyValueInertOnly = false;
 
   for (const value of argValues) {
     const matches = spans.filter((span) => (spanCandidates.get(span.id) ?? []).some((candidate) => candidate.includes(value)));
@@ -106,21 +119,30 @@ export function argumentProvenanceMatch(args: unknown, spans: Span[]): Provenanc
     }
 
     matchedAny = true;
+    let valueActionable = false;
+    let valueInert = false;
     for (const span of matches) {
       matchedSpanIds.add(span.id);
       if (span.trust === 'actionable') {
         actionablePresent = true;
+        valueActionable = true;
       }
       if (span.trust !== 'inert') {
         onlyInert = false;
+      } else {
+        valueInert = true;
       }
+    }
+    if (valueInert && !valueActionable) {
+      anyValueInertOnly = true;
     }
   }
 
   return {
     inertOnly: matchedAny && onlyInert,
     actionablePresent,
-    matchedSpanIds: Array.from(matchedSpanIds)
+    matchedSpanIds: Array.from(matchedSpanIds),
+    anyValueInertOnly
   };
 }
 
@@ -374,7 +396,7 @@ export function decideAttribution(
       ? ` (${policy.contentSensitivity.reasons.join('; ')})`
       : '';
 
-    if (provenanceMatch.inertOnly && !provenanceMatch.actionablePresent) {
+    if (provenanceMatch.anyValueInertOnly) {
       return {
         verdict: 'block',
         reason: `Blocked because tool arguments originate only from inert spans for a sensitive action${contentNote}.`,

@@ -27,6 +27,12 @@ export interface WrapSpanOptions {
 }
 
 export function wrapSpan({ origin, content, meta }: WrapSpanOptions): Span {
+  if (typeof content !== 'string') {
+    throw new AegisSigningError(
+      `Span content for origin '${origin}' must be a string, got ${content === null ? 'null' : typeof content}.`
+    );
+  }
+
   const now = new Date().toISOString();
   const span: Omit<Span, 'sig'> = {
     id: randomUUID(),
