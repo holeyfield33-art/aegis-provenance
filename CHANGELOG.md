@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-12
+
+### Fixed
+
+- **Security**: `argumentProvenanceMatch` aggregated the actionable/inert
+  match signal across all argument values in a tool call into a single
+  flag, so one benign argument value that happened to match a trusted
+  (actionable) span could mask that a different, dangerous argument value
+  in the same call matched only an untrusted (inert) span — allowing a
+  call that should have been blocked. Fixed by tracking inert-only-ness
+  per argument value (`anyValueInertOnly`) instead of aggregating across
+  the whole call. Reproduced and verified against the README's own worked
+  exfiltration example.
+- `wrapSpan` now validates that span `content` is a string and throws a
+  typed `AegisSigningError` immediately, instead of signing invalid input
+  and crashing later with an opaque `TypeError` deep inside
+  provenance-matching internals.
+
 ### Added
 
 - Content-based sensitive-action classification (`contentSensitivityCheck` in
@@ -63,4 +81,5 @@ Initial public release of the Aegis provenance-enforcing context proxy.
   baseline ASR, framed ASR, enforcement rate, benign allow rate, and
   format-compliance rate per model.
 
+[0.1.1]: https://github.com/holeyfield33-art/aegis-provenance/releases/tag/v0.1.1
 [0.1.0]: https://github.com/holeyfield33-art/aegis-provenance/releases/tag/v0.1.0
