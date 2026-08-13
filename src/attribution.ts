@@ -358,20 +358,29 @@ export function textEscalationCheck(text: string): TextEscalationResult {
   }
 
   const correctionMatch = CORRECTION_MARKER_PATTERN.exec(text);
-  const artifactMatch = OFFENSIVE_ARTIFACT_PATTERN.exec(text);
-
-  if (!correctionMatch || !artifactMatch) {
+  if (!correctionMatch) {
     return { escalation: false, reasons: [] };
   }
 
-  const reasons: string[] = ['response contains a technical correction about tool/system scope'];
-  reasons.push(
-    artifactMatch.index >= correctionMatch.index
-      ? 'offensive-tooling artifact appears after the correction (correction-as-escalation pattern)'
-      : 'offensive-tooling artifact co-occurs with a technical correction'
+  // The signature is ordered: the correction must come first, with the
+  // offensive artifact following it. Scan every artifact occurrence (a
+  // single exec() would only see the first, which may precede the
+  // correction) and require at least one at or after the correction.
+  const artifactScan = new RegExp(OFFENSIVE_ARTIFACT_PATTERN.source, 'gi');
+  const artifactAfterCorrection = [...text.matchAll(artifactScan)].some(
+    (match) => match.index >= correctionMatch.index
   );
+  if (!artifactAfterCorrection) {
+    return { escalation: false, reasons: [] };
+  }
 
-  return { escalation: true, reasons };
+  return {
+    escalation: true,
+    reasons: [
+      'response contains a technical correction about tool/system scope',
+      'offensive-tooling artifact appears after the correction (correction-as-escalation pattern)'
+    ]
+  };
 }
 
 export function sensitiveActionPolicy(
