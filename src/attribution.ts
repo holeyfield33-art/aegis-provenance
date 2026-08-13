@@ -1,4 +1,5 @@
 import type { Span } from './types.js';
+import { AegisAttributionError } from './types.js';
 import { candidateRepresentations, normalizeMatchText } from './normalize.js';
 
 export interface ProvenanceMatchResult {
@@ -66,6 +67,26 @@ const defaultSensitivityTable: SensitivityTable = {
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// Detects true cycles (an object appearing among its own ancestors), not
+// merely a value referenced twice — a DAG with shared sub-objects is valid
+// JSON and must not be rejected. `ancestors` tracks only the current
+// recursion path and is unwound on the way back up, so revisiting a shared
+// reference from a sibling branch is not flagged.
+function hasCircularReference(value: unknown, ancestors: Set<object> = new Set()): boolean {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  if (ancestors.has(value)) {
+    return true;
+  }
+
+  ancestors.add(value);
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  const circular = children.some((child) => hasCircularReference(child, ancestors));
+  ancestors.delete(value);
+  return circular;
 }
 
 function extractStrings(value: unknown): string[] {
@@ -362,6 +383,10 @@ export function decideAttribution(
   canary: CanaryDetectionResult;
   sensitiveAction: boolean;
 } {
+  if (hasCircularReference(args)) {
+    throw new AegisAttributionError('Model returned tool_args containing a circular reference, which cannot be analyzed.');
+  }
+
   const provenanceMatch = argumentProvenanceMatch(args, spans);
   const argsCanary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
   const textCanary = canaryDetection(modelText ?? '', canaryMap);
