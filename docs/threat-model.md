@@ -133,11 +133,16 @@ alongside any "launch-ready" claim.
   that mislabeling.
 - **Red-team coverage is bounded by test fidelity.** Published red-team results
   report *"no bypass found among attacks the harness could actually weaponize."*
-  A large fraction of expected-deny attacks are never weaponized by the current
-  verbatim mock model, and reconstruction/paraphrase attack classes are not yet
-  exercised. This is a coverage statement, not a proof of absence. Do not
-  restate these numbers as "zero bypasses" without this qualifier. See
-  `docs/audits/` for the current baseline and its methodology caveats.
+  Mutation-space coverage is now broad: a 36,000+ execution sweep (full catalog
+  plus a 4-generation evolutionary rephrase-and-retry attacker) exercised every
+  mutation strategy the kit generates — synonym substitution, roleplay,
+  bilingual reframing, encoding-wrapping, step-escalation — with zero confirmed
+  bypasses of the provenance/intent gate. The residual gap is specifically a
+  mock-fidelity ceiling: no attacker in-harness can drive the mock model to
+  *weaponize* a reconstructed instruction into a sensitive tool call, so the
+  reconstruction class remains formally untested against the gate. See
+  `docs/audits/2026-08-13-agentic-sweep.md` and `docs/audits/` generally for
+  the current baseline and its methodology caveats.
 
 ## 6. Assumptions
 
