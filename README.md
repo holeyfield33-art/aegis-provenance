@@ -22,8 +22,8 @@ checks before any tool call is allowed.
 npm install aegis-provenance
 ```
 
-> **Note:** publishing to npm is pending. Until the package is published, use it
-> from source by cloning this repository and running `npm ci`.
+> **Note:** this package is not yet published to npm. Until then, install from
+> source by cloning this repository and running `npm ci`.
 
 ## Quick start
 
