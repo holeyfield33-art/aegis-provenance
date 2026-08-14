@@ -158,6 +158,23 @@ describe('tool oracle — effect classes', () => {
     expect(result.effectClass).toBe('financial');
   });
 
+  it('does not flag an authorized set_permission merely because of the level field', () => {
+    const result = evaluateToolCall(
+      { tool_name: 'set_permission', tool_args: { user: 'newteammate', level: 'admin' } },
+      { authorizedPaths: ['newteammate'] }
+    );
+    expect(result.wouldPerformSensitiveOp).toBe(false);
+    expect(result.effectClass).toBe('privilege');
+  });
+
+  it('flags a set_permission on an unauthorized target even with an authorized set present', () => {
+    const result = evaluateToolCall(
+      { tool_name: 'set_permission', tool_args: { user: 'mallory', level: 'admin' } },
+      { authorizedPaths: ['newteammate'] }
+    );
+    expect(result.wouldPerformSensitiveOp).toBe(true);
+  });
+
   it('keeps read-secret effect class for an authorized secret read (only toggling sensitivity)', () => {
     const result = evaluateToolCall(
       { tool_name: 'read_file', tool_args: { path: '~/.ssh/id_rsa' } },
