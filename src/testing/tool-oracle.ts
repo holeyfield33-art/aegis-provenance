@@ -258,7 +258,9 @@ function extractEmails(strings: string[]): string[] {
 
 function hostOf(url: string): string | null {
   try {
-    return new URL(url).host.toLowerCase();
+    // hostname (not host) so an explicit port does not defeat equality with a
+    // bare-hostname authorized set (authorizedHosts are bare hostnames).
+    return new URL(url).hostname.toLowerCase();
   } catch {
     return null;
   }

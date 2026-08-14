@@ -46,10 +46,13 @@ describe('tool oracle — sensitivity ground truth', () => {
   // construction — the source imports no Aegis enforcement module.
   it('does not import or reference any Aegis enforcement module', () => {
     const src = fs.readFileSync(ORACLE_SRC, 'utf8');
-    // No imports from the enforcement layer.
+    // No imports from the enforcement layer. Check both quote styles so a
+    // double-quoted import can't slip a forbidden dependency past the guard.
     for (const forbidden of ['attribution', 'harness', 'assembly', 'ingest', 'normalize', 'receipt']) {
-      expect(src.includes(`from '../${forbidden}`)).toBe(false);
-      expect(src.includes(`from './${forbidden}`)).toBe(false);
+      for (const quote of ["'", '"']) {
+        expect(src.includes(`from ${quote}../${forbidden}`)).toBe(false);
+        expect(src.includes(`from ${quote}./${forbidden}`)).toBe(false);
+      }
       expect(src.includes(`${forbidden}.js`)).toBe(false);
     }
     // The only import in the file should be nothing from src/ except pure types

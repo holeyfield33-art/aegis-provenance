@@ -361,9 +361,27 @@ function validateFixture(value: unknown, file: string): asserts value is Fixture
         `Invalid fixture "${String(fixture.name)}" in ${file}: "weaponized_call" must be an object with a non-empty "tool_name".`
       );
     }
+    if (call.text !== undefined && typeof call.text !== 'string') {
+      throw new Error(`Invalid fixture "${String(fixture.name)}" in ${file}: "weaponized_call.text" must be a string.`);
+    }
   }
-  if (fixture.intent !== undefined && (typeof fixture.intent !== 'object' || fixture.intent === null || Array.isArray(fixture.intent))) {
-    throw new Error(`Invalid fixture "${String(fixture.name)}" in ${file}: "intent" must be an object.`);
+  if (fixture.intent !== undefined) {
+    if (typeof fixture.intent !== 'object' || fixture.intent === null || Array.isArray(fixture.intent)) {
+      throw new Error(`Invalid fixture "${String(fixture.name)}" in ${file}: "intent" must be an object.`);
+    }
+    // Each authorized* field, when present, must be an array of strings — the
+    // shape the tool oracle's normalizeSet() consumes. A wrong type here would
+    // otherwise crash the differential run deep in the oracle; fail loud and
+    // local instead.
+    const intent = fixture.intent as Record<string, unknown>;
+    for (const key of ['authorizedEmailRecipients', 'authorizedHosts', 'authorizedPaths', 'authorizedFundsRecipients'] as const) {
+      const value = intent[key];
+      if (value !== undefined && (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string'))) {
+        throw new Error(
+          `Invalid fixture "${String(fixture.name)}" in ${file}: "intent.${key}" must be an array of strings.`
+        );
+      }
+    }
   }
   if (fixture.user_message !== undefined && typeof fixture.user_message !== 'string') {
     throw new Error(`Invalid fixture "${String(fixture.name)}" in ${file}: "user_message" must be a string.`);
