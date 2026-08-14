@@ -454,8 +454,26 @@ function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+/**
+ * A fixture built for the differential oracle (Phase 2A onward) carries at
+ * least one differential-only field. The classic provenance benchmark skips
+ * these so it stays a STABLE regression guard over the original corpus — its
+ * job is to prove Aegis's provenance verdict still matches the expected label
+ * on the cases it was tuned for, not to run the FN-hunting corpus (which is
+ * deliberately built to include calls Aegis mis-handles). The differential
+ * benchmark (`npm run benchmark:differential`) is what scores those.
+ */
+export function isDifferentialFixture(fixture: Fixture): boolean {
+  return (
+    fixture.oracle_sensitive !== undefined ||
+    fixture.weaponized_call !== undefined ||
+    fixture.intent !== undefined ||
+    fixture.user_message !== undefined
+  );
+}
+
 export async function runBenchmark(attacksDir: string = ATTACKS_DIR): Promise<BenchmarkReport> {
-  const fixtures = loadFixtures(attacksDir);
+  const fixtures = loadFixtures(attacksDir).filter((fixture) => !isDifferentialFixture(fixture));
   const results: FixtureResult[] = [];
   const crashed: CrashRecord[] = [];
 

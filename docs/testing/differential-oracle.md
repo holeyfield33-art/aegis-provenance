@@ -113,4 +113,9 @@ Fixtures gain four **optional** fields, all ignored by the old benchmark:
 - `user_message?: string` — the user-session turn, so a fixture can model real
   user intent.
 
-`expected_verdict` and the old `npm run benchmark` are untouched.
+`expected_verdict` and the old `npm run benchmark` are untouched: the classic
+benchmark **skips** any fixture carrying a differential-only field
+(`isDifferentialFixture`), so it stays a stable 99/99 regression guard over the
+original corpus while the differential benchmark scores the full set — including
+the FN-hunting corpus that is deliberately built to contain calls Aegis
+mishandles.

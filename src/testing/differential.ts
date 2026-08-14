@@ -86,6 +86,20 @@ export interface DifferentialReport {
   degenerate_false_positives: DifferentialCase[];
   /** FPs with a concrete, benign resolved effect — the genuine adoption cost. */
   effect_false_positives: DifferentialCase[];
+  /**
+   * Fixtures whose declared `oracle_sensitive` label disagrees with the
+   * independent tool-oracle inspection of the same weaponized call. A
+   * disagreement is a review signal: either the label is wrong, or the tool
+   * oracle is too lenient/strict for that call shape. Surfacing them is the
+   * guard against silently trusting a hand-written label.
+   */
+  label_oracle_disagreements: Array<{
+    name: string;
+    category: string;
+    declared: boolean;
+    inspected: boolean;
+    inspectedReason: string;
+  }>;
   cases: DifferentialCase[];
   crashed: Array<{ name: string; category: string; error: string }>;
 }
@@ -205,29 +219,40 @@ export async function runDifferential(attacksDir: string = ATTACKS_DIR): Promise
   const fixtures = loadFixtures(attacksDir);
   const cases: DifferentialCase[] = [];
   const crashed: Array<{ name: string; category: string; error: string }> = [];
+  const disagreements: DifferentialReport['label_oracle_disagreements'] = [];
 
   for (const fixture of fixtures) {
     try {
       const evaluated = await evaluateFixtureWithAegis(fixture);
 
+      // The tool oracle always inspects the exact weaponized call Aegis saw —
+      // both for the effect-class annotation and, when a fixture also declares
+      // a label, as an independent cross-check against that label.
+      const inspected = evaluateToolCall(evaluated.toolCall, toOracleContext(fixture.intent));
+
       // Oracle truth: an explicit fixture label wins; otherwise the tool
-      // oracle inspects the exact weaponized call Aegis saw.
+      // oracle's inspection is the ground truth.
       let oracleSensitive: boolean;
       let oracleReason: string;
       let oracleSource: 'fixture-label' | 'tool-oracle';
-      let effectClass = 'n/a';
+      const effectClass = inspected.effectClass;
       if (typeof fixture.oracle_sensitive === 'boolean') {
         oracleSensitive = fixture.oracle_sensitive;
         oracleReason = `Fixture-declared ground truth (oracle_sensitive=${fixture.oracle_sensitive}).`;
         oracleSource = 'fixture-label';
-        // Still run the tool oracle for its effect-class annotation only.
-        effectClass = evaluateToolCall(evaluated.toolCall, toOracleContext(fixture.intent)).effectClass;
+        if (inspected.wouldPerformSensitiveOp !== fixture.oracle_sensitive) {
+          disagreements.push({
+            name: fixture.name,
+            category: fixture.category,
+            declared: fixture.oracle_sensitive,
+            inspected: inspected.wouldPerformSensitiveOp,
+            inspectedReason: inspected.reason
+          });
+        }
       } else {
-        const oracle = evaluateToolCall(evaluated.toolCall, toOracleContext(fixture.intent));
-        oracleSensitive = oracle.wouldPerformSensitiveOp;
-        oracleReason = oracle.reason;
+        oracleSensitive = inspected.wouldPerformSensitiveOp;
+        oracleReason = inspected.reason;
         oracleSource = 'tool-oracle';
-        effectClass = oracle.effectClass;
       }
 
       const cell = classify(oracleSensitive, evaluated.aegisBlocked);
@@ -274,6 +299,7 @@ export async function runDifferential(attacksDir: string = ATTACKS_DIR): Promise
     false_positives: falsePositives,
     degenerate_false_positives: falsePositives.filter((c) => DEGENERATE_EFFECTS.has(c.effectClass)),
     effect_false_positives: falsePositives.filter((c) => !DEGENERATE_EFFECTS.has(c.effectClass)),
+    label_oracle_disagreements: disagreements,
     cases,
     crashed
   };
@@ -332,6 +358,18 @@ function printReport(report: DifferentialReport): void {
     for (const c of report.degenerate_false_positives) {
       console.log(`    - [${c.category}] ${c.name}  (tool: ${c.toolCall.tool_name}, effect: ${c.effectClass})`);
     }
+  }
+
+  if (report.label_oracle_disagreements.length > 0) {
+    console.log('');
+    console.log(
+      `?!? LABEL/ORACLE DISAGREEMENTS (${report.label_oracle_disagreements.length}) — declared oracle_sensitive != independent tool-oracle inspection:`
+    );
+    for (const d of report.label_oracle_disagreements) {
+      console.log(`  - [${d.category}] ${d.name}: declared=${d.declared} inspected=${d.inspected}`);
+      console.log(`      inspection: ${d.inspectedReason}`);
+    }
+    console.log('  (Review each: the label may be wrong, or the tool oracle too lenient/strict for that shape.)');
   }
 
   if (report.crashed.length > 0) {
