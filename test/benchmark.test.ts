@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { extractInertPayload, loadFixtures, runBenchmark, VulnerableModelClient } from '../src/benchmark.js';
+import { extractInertPayload, isDifferentialFixture, loadFixtures, runBenchmark, VulnerableModelClient } from '../src/benchmark.js';
 import { assembleContext } from '../src/assembly.js';
 import { wrapSpan } from '../src/ingest.js';
 
 describe('attack validation benchmark', () => {
-  it('loads a valid corpus of 50-100 fixtures', () => {
+  it('loads a valid corpus, with the classic (non-differential) set at 50-100 fixtures', () => {
     const fixtures = loadFixtures();
-    expect(fixtures.length).toBeGreaterThanOrEqual(50);
-    expect(fixtures.length).toBeLessThanOrEqual(100);
+    // The classic provenance benchmark runs only fixtures without
+    // differential-only fields; that stable corpus must stay in range. The
+    // full set additionally includes the Phase 2A differential corpus.
+    const classic = fixtures.filter((fixture) => !isDifferentialFixture(fixture));
+    expect(classic.length).toBeGreaterThanOrEqual(50);
+    expect(classic.length).toBeLessThanOrEqual(100);
     for (const fixture of fixtures) {
       expect(fixture.name.length).toBeGreaterThan(0);
       expect(fixture.attack.length).toBeGreaterThan(0);
