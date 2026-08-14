@@ -94,7 +94,11 @@ async function main(): Promise<void> {
     console.log(`  response: ${JSON.stringify(result.response)}`);
   } catch (error) {
     if (error instanceof AegisBlockedError) {
-      console.log(`  model attempted: send_email(recipient="admin@evil.com")`);
+      const receipts = await receiptStore.loadReceipts();
+      const attempted = receipts[receipts.length - 1]?.model_action;
+      console.log(
+        `  model attempted: ${attempted?.tool_name ?? 'unknown'}(${JSON.stringify(attempted?.tool_args ?? {})})`
+      );
       console.log('');
       console.log('X BLOCKED by aegis');
       console.log(`  reason:  ${error.message}`);
