@@ -103,7 +103,7 @@ const BENIGN_CONTEXT_ORIGIN: Origin = 'tool-result';
 export type EvalCondition = 'baseline' | 'framed';
 export type FixtureKind = 'attack' | 'benign';
 
-interface EvalFixture {
+export interface EvalFixture {
   name: string;
   category: string;
   kind: FixtureKind;
