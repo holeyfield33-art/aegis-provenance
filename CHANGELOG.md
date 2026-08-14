@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typed `AegisSigningError` immediately, instead of signing invalid input
   and crashing later with an opaque `TypeError` deep inside
   provenance-matching internals.
+- **Security**: closed two findings from the aletheia-redteam-kit audit —
+  circular `tool_args` could crash attribution with an uncaught `RangeError`
+  instead of failing closed (#11), and untrusted content could forge literal
+  inert-span frame delimiters in the model-facing rendering (#13; the
+  provenance/intent decision boundary itself was unaffected either way, this
+  is defense-in-depth framing hygiene). Also bumped `nanoid` and `postcss`
+  (transitive dev dependencies) to close two HIGH `npm audit` advisories
+  surfaced by the same audit.
 
 ### Added
 
@@ -40,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matches against these normalized/decoded representations of each span, not
   just its literal text, recovering the byte-level link when a model decodes
   an obfuscated span or folds confusable characters when repeating it.
+- Correction-as-escalation detection for free-text model responses
+  (`textEscalationCheck` in `src/attribution.ts`): flags — does not block — a
+  response that asserts a technical correction about a tool/system's scope
+  and then supplies offensive-tooling artifacts later in the same response.
+- `docs/threat-model.md`: what Aegis defends against, the behavioral contract
+  for integrators, and the residual risks/non-goals it does not cover.
+- `examples/demo-narrative.ts` (`npm run demo:narrative`): a three-beat
+  scenario — a legitimate action allowed, the same tool blocked when the
+  request originates from injected content instead, and the resulting
+  receipt chain verified — for the README/demo recording.
 - New `attacks/tool-args/` fixture category (origin `tool-result`) exercising
   the content-based classifier via `search`/`read_file` calls — neither
   sensitive by name — plus new `encoded/` fixtures for decode-and-retype and
