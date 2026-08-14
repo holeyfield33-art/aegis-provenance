@@ -7,6 +7,13 @@ Aegis is a provenance-enforcing context proxy for LLM interactions. It wraps eve
 input chunk in a signed span, marks untrusted content as inert, and makes egress
 checks before any tool call is allowed.
 
+![A model reads a hidden instruction planted in a web page and tries to email its contents to an attacker; aegis blocks the tool call and records a signed receipt.](docs/aegis-demo.gif)
+
+The recording above is `examples/live-agent-injection.ts` in scripted (deterministic)
+mode — `npm run demo:live-agent`. The same file also has a `--live` mode that
+drives a real model over an OpenAI-compatible endpoint instead of a scripted
+stand-in, for anyone who wants to confirm the behavior isn't staged.
+
 ## What it does
 
 - Wraps text in cryptographically signed spans with explicit `origin` metadata.

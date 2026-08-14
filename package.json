@@ -27,6 +27,7 @@
     "llm-eval": "tsx ./src/llm-eval.ts",
     "demo": "tsx ./src/demo.ts demo",
     "demo:narrative": "tsx ./examples/demo-narrative.ts",
+    "demo:live-agent": "tsx ./examples/live-agent-injection.ts",
     "prepack": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test"
   },
