@@ -6,5 +6,6 @@ dist/
 aegis-demo-receipts.log
 benchmark-report.json
 llm-eval-report.json
+real-model-asr-report.json
 llm-eval-summary.md
 coverage/

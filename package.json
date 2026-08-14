@@ -25,6 +25,7 @@
     "test": "vitest run",
     "benchmark": "tsx ./src/benchmark.ts",
     "benchmark:differential": "tsx ./src/testing/differential.ts",
+    "asr:real-model": "tsx ./src/testing/real-model-asr.ts",
     "llm-eval": "tsx ./src/llm-eval.ts",
     "demo": "tsx ./src/demo.ts demo",
     "demo:narrative": "tsx ./examples/demo-narrative.ts",
