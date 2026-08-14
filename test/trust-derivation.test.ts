@@ -28,6 +28,7 @@ describe('deriveTrust purity', () => {
       // Interleave calls for other origins between repeated calls for this one
       // to rule out any hidden call-order or shared-state dependence.
       for (const other of shuffled) {
+        if (other === origin) continue;
         deriveTrust(other);
       }
       const second = deriveTrust(origin);
