@@ -59,9 +59,54 @@ describe('egress destination authorization — smuggled recipients block', () =>
     const obfuscated = `ops${zwsp}@evil-mirr${cyrillicO}r.example`;
     const args = { recipient: 'alice@corp.example', bcc: obfuscated };
 
-    const dest = extractCallDestinations(args);
+    const dest = extractCallDestinations('send_email', args);
     expect([...dest.emails]).toContain('ops@evil-mirror.example');
     expect(decide('send_email', args).verdict).toBe('block');
+  });
+
+  // Per-tool destination contract (audit follow-up): a tool's egress
+  // destinations are only the values it actually transmits to. A URL in a
+  // send_email argument is payload (a link in the body) — send_email sends mail,
+  // it does not fetch URLs — so it is NOT a destination and must not be blocked
+  // as one; likewise an email address in an http_post argument is body payload,
+  // not a destination. Treating either as a destination would be a false
+  // positive, and would force a hand-declared oracle label that contradicts the
+  // independent tool oracle.
+  it('does NOT treat a URL in a send_email argument as a destination (it is payload)', () => {
+    const spans = [
+      wrapSpan({ origin: 'system', content: 'assistant' }),
+      wrapSpan({ origin: 'user-session', content: 'Email the report to alice@corp.example.' }),
+      wrapSpan({ origin: 'tool-result', content: 'delivery note' })
+    ];
+    const args = { recipient: 'alice@corp.example', metadata: { link: 'https://dashboard.example/report' } };
+    expect(extractCallDestinations('send_email', args).hosts.size).toBe(0);
+    expect(decideAttribution('send_email', args, {}, spans).verdict).toBe('allow');
+  });
+
+  it('does NOT treat an email in an http_post argument as a destination (it is payload)', () => {
+    const spans = [
+      wrapSpan({ origin: 'system', content: 'assistant' }),
+      wrapSpan({ origin: 'user-session', content: 'Post the status to https://status.corp.example/webhook.' }),
+      wrapSpan({ origin: 'tool-result', content: 'webhook note' })
+    ];
+    const args = { url: 'https://status.corp.example/webhook', body: { author: 'ops@corp.example' } };
+    expect(extractCallDestinations('http_post', args).emails.size).toBe(0);
+    expect(decideAttribution('http_post', args, {}, spans).verdict).toBe('allow');
+  });
+
+  // Network destinations are authorized at origin (scheme+host+port), not bare
+  // hostname (audit follow-up): a non-default port or a scheme downgrade is a
+  // different, unauthorized origin. Path is intentionally not bound.
+  it('blocks a non-default-port escalation on an authorized host', () => {
+    const spans = [
+      wrapSpan({ origin: 'system', content: 'assistant' }),
+      wrapSpan({ origin: 'user-session', content: 'Post the status to https://trusted.example/status.' }),
+      wrapSpan({ origin: 'tool-result', content: 'note' })
+    ];
+    expect(decideAttribution('http_post', { url: 'https://trusted.example:444/admin' }, {}, spans).verdict).toBe('block');
+    expect(decideAttribution('http_post', { url: 'http://trusted.example/status' }, {}, spans).verdict).toBe('block');
+    // Same origin, different path is allowed by design.
+    expect(decideAttribution('http_post', { url: 'https://trusted.example/other' }, {}, spans).verdict).toBe('allow');
   });
 
   it('blocks an unauthorized nested callback host for http_post', () => {
@@ -115,20 +160,20 @@ describe('egress destination authorization — legitimate sends allow', () => {
 describe('egressAuthorizationCheck decisions', () => {
   it('reports authorized when every destination is user-named', () => {
     const spans = [wrapSpan({ origin: 'user-session', content: 'Email alice@corp.example.' })];
-    const result = egressAuthorizationCheck({ recipient: 'alice@corp.example' }, spans);
+    const result = egressAuthorizationCheck('send_email', { recipient: 'alice@corp.example' }, spans);
     expect(result.decision).toBe('authorized');
   });
 
   it('reports block with the unauthorized destination named', () => {
     const spans = [wrapSpan({ origin: 'user-session', content: 'Email alice@corp.example.' })];
-    const result = egressAuthorizationCheck({ recipient: 'alice@corp.example', bcc: 'evil@evil.example' }, spans);
+    const result = egressAuthorizationCheck('send_email', { recipient: 'alice@corp.example', bcc: 'evil@evil.example' }, spans);
     expect(result.decision).toBe('block');
     expect(result.unauthorized).toContain('evil@evil.example');
   });
 
   it('reports not-applicable for a call with no email/host destination', () => {
     const spans = [wrapSpan({ origin: 'user-session', content: 'search the corpus' })];
-    const result = egressAuthorizationCheck({ query: 'AEGIS_EVAL_API_KEY' }, spans);
+    const result = egressAuthorizationCheck('search', { query: 'AEGIS_EVAL_API_KEY' }, spans);
     expect(result.decision).toBe('not-applicable');
   });
 });

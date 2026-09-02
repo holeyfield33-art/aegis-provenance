@@ -98,10 +98,44 @@ If you build on Aegis, you can rely on the following:
    content is in scope, this fallback is disabled and stronger evidence is
    required. As you add connectors, the situations where this fallback applies
    shrink toward zero — plan for user intent to be expressed explicitly.
-5. **`block` throws; `flag` and `allow` return.** A blocked action raises
+5. **Every egress destination must be authorized — per the tool's contract.**
+   For a sensitive egress call Aegis extracts the destinations the tool actually
+   transmits to, per an explicit per-tool contract, and requires each to be
+   authorized by the user session:
+   - `send_email` transmits to email **recipients**. This is a deliberately
+     **conservative, lenient-mailer** model, not a precise recipient-key schema:
+     any address in the arguments at any depth (nested objects/arrays,
+     JSON-in-string incl. double-escaped, header-injected lines, comma/newline
+     lists, and behind homoglyph/percent/base64/hex/rot13 obfuscation) is treated
+     as a recipient — even a bare address in a body-shaped field. It errs toward
+     extracting an address rather than missing a smuggled one, so an address in
+     free text can be a false positive; that is the intended trade-off. A **URL**
+     in a `send_email` argument is payload (a link in the body), **not** a
+     destination — this tool sends mail, it does not fetch URLs.
+   - Tool names are resolved through a documented alias map (a lenient dispatcher
+     routes `send_http`/`http_request`/`post` to the network tool and
+     `mail`/`SendEmail` to the mailer), so a call is classified by the tool it
+     actually reaches — never by a name-prefix guess. An unknown tool receives no
+     positive egress authorization.
+   - `http_post` transmits to the URL **host(s)** it posts to. An **email** in an
+     `http_post` argument is body payload, **not** a destination.
+
+   Extracting a value the tool does not act on would be a false positive, not
+   defense-in-depth, so the contract is matched exactly (and kept in lock-step
+   with the differential tool oracle). A deployment whose tool consumes a further
+   destination field — e.g. a mailer that fires a delivery webhook to a URL in
+   its arguments — must widen this contract, and the oracle, together. When a
+   call carries destinations of more than one kind, authorization is evaluated
+   across **all** kinds together: an authorized destination of one kind can never
+   license an unauthorized destination of another. Network destinations are
+   matched at **origin** granularity (scheme + host + port); a non-default port
+   or a scheme downgrade is a different, unauthorized origin. The URL **path is
+   intentionally not bound** — authorizing an origin authorizes all paths on it;
+   applications needing per-path control must enforce it downstream.
+6. **`block` throws; `flag` and `allow` return.** A blocked action raises
    `AegisBlockedError` carrying the receipt ID. Flags are advisory and do not
    halt execution — they are for the receipt trail and human review.
-6. **Set a persistent signing key in production.** With no `AEGIS_SIGNING_KEY`
+7. **Set a persistent signing key in production.** With no `AEGIS_SIGNING_KEY`
    (or `AEGIS_SIGNING_KEY_FILE`), Aegis generates an ephemeral per-process key.
    Span signatures then cannot be verified across restarts or processes. For any
    deployment that persists or transports spans, set a stable key.
@@ -124,6 +158,13 @@ alongside any "launch-ready" claim.
   write access to the receipt store can recompute the entire chain. External
   anchoring / signed receipts is a roadmap item; until then, treat the store as
   needing its own integrity controls.
+- **Receipt append serialization is per-`ReceiptStore` instance, per process.**
+  Concurrent appends *through one `ReceiptStore`* are serialized so they cannot
+  fork the chain. Two `ReceiptStore` instances — or two processes — writing the
+  same file concurrently can still race; the chain-verification-before-append
+  detects the resulting corruption on the next append but does not prevent it.
+  For multi-writer deployments, put a single writer in front of the store or use
+  an external lock.
 - **Aegis gates egress, it does not sandbox execution.** A `flag` verdict does
   not stop anything. If your tools have side effects, a flagged-but-not-blocked
   action still runs.

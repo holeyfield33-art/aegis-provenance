@@ -174,15 +174,19 @@ Aegis uses deterministic signals to decide whether a tool call is safe:
   each span, so a model that decodes an obfuscated span or folds confusable
   characters when repeating it doesn't break the byte-level link the way a
   purely literal substring check would.
-- Destination authorization: for a sensitive egress call, every recipient/host
-  the call would actually transmit to must be one the user authorized. Aegis
-  extracts destinations structurally — through nested objects and arrays, JSON
-  embedded in string fields (including double-escaped), header-injected lines,
+- Destination authorization: for a sensitive egress call, every destination the
+  tool would actually transmit to must be one the user authorized. Destinations
+  are defined per the tool's contract — `send_email` transmits to email
+  recipients (a URL in its args is body payload, not a destination); `http_post`
+  transmits to URL hosts (an email in its args is payload). Aegis extracts those
+  destinations structurally — through nested objects/arrays, JSON embedded in
+  string fields (including double-escaped), header-injected lines,
   comma-separated lists, and behind homoglyph/percent/base64/hex/rot13
   obfuscation — so an authorized recipient can no longer mask a smuggled BCC,
-  nested callback, or serialized extra recipient. A single recipient the user
-  asked for by role ("email my manager") is still allowed when the untrusted
-  context is clean; anything the user did not authorize is blocked.
+  nested address, or serialized extra recipient. URL hosts are matched at origin
+  (scheme+host+port). A single recipient the user asked for by role ("email my
+  manager") is still allowed when the untrusted context is clean; anything the
+  user did not authorize is blocked.
 
 ### Receipts
 

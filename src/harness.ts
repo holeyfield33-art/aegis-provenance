@@ -5,6 +5,7 @@ import { decideAttribution } from './attribution.js';
 import { createReceipt, GENESIS_HASH } from './receipt.js';
 import { ReceiptStore } from './receipt-store.js';
 import { getSigningKey, derivePublicKey } from './crypto/keys.js';
+import { resolveCanonicalTool, normalizeToolKey } from './tool-contracts.js';
 import { AegisBlockedError, AegisReceiptError, AegisAttributionError, AegisVerificationError } from './types.js';
 
 export interface ModelClientResponse {
@@ -18,11 +19,6 @@ export interface ModelClient {
   call(messages: ProviderMessage[]): Promise<ModelClientResponse>;
 }
 
-/** Case- and punctuation-insensitive key for matching a model-emitted tool
- * name against a registered one (`SendEmail` / `send-email` -> `sendemail`). */
-function normalizeToolNameKey(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
 
 export interface HarnessOptions {
   system: string;
@@ -70,19 +66,21 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
 
   const modelResponse = await options.modelClient.call(assembled.messages);
 
-  // Resolve the model's tool name to a registered tool. A real model routinely
-  // emits a case/spacing/punctuation variant of a registered name
-  // (`SendEmail`, `send-email`, `SEND_EMAIL`) for the same tool; rejecting
-  // those outright is an availability cost (#32) with no security benefit,
-  // since the variant still denotes a real registered tool that then runs the
-  // full sensitivity pipeline. Resolution is deliberately conservative: it
-  // matches only on a case/non-alphanumeric-insensitive key, so a genuinely
-  // different name (`mail`, `exfiltrate_now`) still resolves to nothing and is
-  // refused fail-closed. Broader semantic aliasing is intentionally NOT done
-  // here (see #32 / README limitations).
-  const canonicalToolNames = new Map<string, string>();
+  // Resolve the model's tool name to a registered tool. A real dispatcher is
+  // lenient: it routes a case/spacing/punctuation variant (`SendEmail`,
+  // `send-email`) AND a documented alias (`mail`, `send_http`) to the same
+  // underlying tool. Aegis mirrors that so a call reaches — and is enforced as —
+  // the tool it truly denotes, instead of being blindly rejected (an
+  // availability cost) or, worse, mis-analyzed under the wrong contract. Two
+  // layers, both fail-closed on a genuinely unknown name:
+  //   1. exact match on a case/punctuation-insensitive key against a REGISTERED
+  //      tool name (covers custom tools and spelling variants);
+  //   2. otherwise, the shared alias resolver maps the name to a canonical tool
+  //      (src/tool-contracts.ts) — accepted only if that canonical is actually
+  //      registered for this call. A name matching neither is refused.
+  const registeredByKey = new Map<string, string>();
   for (const tool of options.tools) {
-    canonicalToolNames.set(normalizeToolNameKey(tool.name), tool.name);
+    registeredByKey.set(normalizeToolKey(tool.name), tool.name);
   }
 
   let resolvedToolName = modelResponse.tool_name;
@@ -90,7 +88,14 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
     if (!modelResponse.tool_name) {
       throw new AegisAttributionError('Model returned a tool_call response without a tool_name.');
     }
-    const canonical = canonicalToolNames.get(normalizeToolNameKey(modelResponse.tool_name));
+    const key = normalizeToolKey(modelResponse.tool_name);
+    let canonical = registeredByKey.get(key);
+    if (!canonical) {
+      const aliasCanonical = resolveCanonicalTool(modelResponse.tool_name);
+      if (aliasCanonical) {
+        canonical = registeredByKey.get(normalizeToolKey(aliasCanonical));
+      }
+    }
     if (!canonical) {
       throw new AegisAttributionError(`Model returned an unregistered tool_name: ${modelResponse.tool_name}`);
     }

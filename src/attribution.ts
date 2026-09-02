@@ -2,6 +2,7 @@ import type { Span } from './types.js';
 import { AegisAttributionError } from './types.js';
 import { candidateRepresentations, normalizeMatchText } from './normalize.js';
 import { egressAuthorizationCheck } from './egress.js';
+import { resolveCanonicalTool } from './tool-contracts.js';
 
 export interface ProvenanceMatchResult {
   inertOnly: boolean;
@@ -397,7 +398,16 @@ export function sensitiveActionPolicy(
   contentSensitivity: ContentSensitivityResult;
 } {
   const lowerName = actionName.toLowerCase();
-  const rule = sensitivityTable.rules.find((ruleItem) => ruleItem.actionPattern.test(lowerName));
+  // Match sensitivity rules against BOTH the raw name and the canonical tool the
+  // name resolves to, so a documented alias (`send_http`, `http_request`, `rm`,
+  // `mail`) is classified as the sensitive tool it reaches rather than slipping
+  // past a name-pattern that only knows the canonical spelling. Without this a
+  // direct decideAttribution caller could route a sensitive egress alias around
+  // the sensitivity gate (and thus around egress destination authorization).
+  const canonical = resolveCanonicalTool(actionName);
+  const rule = sensitivityTable.rules.find(
+    (ruleItem) => ruleItem.actionPattern.test(lowerName) || (canonical !== null && ruleItem.actionPattern.test(canonical))
+  );
   const hasUserSessionIntent = userSessionIntentMatch(actionName, args, spans);
   const contentSensitivity = contentSensitivityCheck(args);
 
@@ -492,7 +502,7 @@ export function decideAttribution(
     // — must be one the user actually authorized. This is what catches an
     // authorized-recipient-plus-hidden-BCC exfiltration that substring
     // provenance alone lets through.
-    const egress = egressAuthorizationCheck(args, spans);
+    const egress = egressAuthorizationCheck(actionName, args, spans);
     if (egress.decision === 'block') {
       return {
         verdict: 'block',

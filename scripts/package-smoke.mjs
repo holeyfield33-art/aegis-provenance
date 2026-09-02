@@ -10,7 +10,7 @@
 // Exits non-zero on any failure. No external dependencies; Node >= 20.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -36,28 +36,44 @@ try {
   console.log('Package smoke test');
   console.log('------------------');
 
-  // 1. Pack the package as it would be published.
-  const packOut = run('npm', ['pack', '--json', '--pack-destination', workDir], ROOT);
-  const tarballName = JSON.parse(packOut)[0].filename;
+  // 0. REGRESSION: plant a stale artifact from an earlier build layout. `npm
+  //    pack` can select its file list BEFORE `prepack` runs, so relying on
+  //    prepack's clean to drop a pre-existing `dist/testing/` is not reliable
+  //    across npm versions. The correct sequence is an EXPLICIT build (which
+  //    cleans dist first) followed by `npm pack --ignore-scripts` (which packs
+  //    that exact, freshly-built dist without re-running the lifecycle). If this
+  //    stale file ends up in the tarball, the check below fails loudly.
+  const staleFile = join(ROOT, 'dist', 'testing', 'stale.js');
+  mkdirSync(join(ROOT, 'dist', 'testing'), { recursive: true });
+  writeFileSync(staleFile, '// planted stale artifact — must NOT be published\n');
+  console.log('  ..   planted stale dist/testing/stale.js as a regression');
+
+  // 1. Build fresh (cleans dist, removing the planted stale file), then pack the
+  //    exact built output without re-triggering lifecycle scripts. Find the
+  //    tarball by globbing rather than parsing stdout.
+  run('npm', ['run', 'build'], ROOT);
+  run('npm', ['pack', '--ignore-scripts', '--pack-destination', workDir], ROOT);
+  const tarballs = readdirSync(workDir).filter((f) => f.endsWith('.tgz'));
+  check(tarballs.length === 1, `packed exactly one tarball (found ${tarballs.length})`);
+  const tarballName = tarballs[0];
   const tarballPath = join(workDir, tarballName);
   check(existsSync(tarballPath), `packed tarball ${tarballName}`);
 
-  // 2. Inspect the tarball contents.
-  const contents = run('npm', ['pack', '--dry-run', '--json'], ROOT);
-  const files = JSON.parse(contents)[0].files.map((f) => f.path);
+  // 2. Inspect the ACTUAL tarball contents (not a second `npm pack --dry-run`),
+  //    so a stale file physically inside the archive is caught. npm prefixes
+  //    every entry with `package/`.
+  const listing = run('tar', ['-tzf', tarballPath], ROOT)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((entry) => entry.replace(/^package\//, ''));
+  check(listing.includes('dist/index.js'), 'ships dist/index.js');
+  check(listing.includes('dist/index.d.ts'), 'ships dist/index.d.ts type declarations');
   check(
-    files.some((p) => p === 'dist/index.js'),
-    'ships dist/index.js'
-  );
-  check(
-    files.some((p) => p === 'dist/index.d.ts'),
-    'ships dist/index.d.ts type declarations'
-  );
-  check(
-    !files.some((p) => p.startsWith('dist/testing/')),
+    !listing.some((p) => p.startsWith('dist/testing/')),
     'does NOT ship dist/testing internal harness'
   );
-  check(files.includes('README.md') && files.includes('LICENSE'), 'ships README and LICENSE');
+  check(listing.includes('README.md') && listing.includes('LICENSE'), 'ships README and LICENSE');
 
   // 3. Install the tarball in an isolated consumer project.
   const consumerDir = join(workDir, 'consumer');

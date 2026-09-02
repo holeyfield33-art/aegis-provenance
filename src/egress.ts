@@ -27,6 +27,7 @@
 
 import type { Span } from './types.js';
 import { foldConfusables, stripInvisible, expandDecodedCandidates } from './normalize.js';
+import { egressContract } from './tool-contracts.js';
 
 const MAX_DEPTH = 8;
 
@@ -36,6 +37,8 @@ const URL_PATTERN = /https?:\/\/[^\s"'<>)\]}]+/gi;
 
 export interface Destinations {
   emails: Set<string>;
+  /** URL origins (scheme://host[:port], default ports normalized away), NOT
+   * bare hostnames — network destinations are authorized at origin granularity. */
   hosts: Set<string>;
 }
 
@@ -144,37 +147,98 @@ function collectLeafStrings(value: unknown, depth = 0, seen: Set<object> = new S
   return [];
 }
 
-function hostOf(url: string): string | null {
+// A network destination is authorized at ORIGIN granularity — scheme + host +
+// port — not bare hostname (audit follow-up). Binding the scheme and port stops
+// an authorized `https://trusted.example/status` from also authorizing
+// `https://trusted.example:444/admin` or an `http://` downgrade. The URL path
+// is intentionally NOT bound: authorizing an origin authorizes all paths on it
+// (a status/webhook host is authorized as a host), a decision recorded in
+// docs/threat-model.md. `URL.origin` normalizes default ports away, so
+// `:443`/`:80` compare equal to the bare form.
+function originOf(url: string): string | null {
   try {
-    return new URL(url).hostname.toLowerCase();
+    const origin = new URL(url).origin;
+    return origin && origin !== 'null' ? origin.toLowerCase() : null;
   } catch {
     return null;
   }
 }
 
-/** Extract every email address and URL host present in a set of raw strings,
- * checking each string in all of its decoded/folded surface forms. */
-function extractFromStrings(strings: string[]): Destinations {
-  const dest = emptyDestinations();
+/** Email addresses present in a set of raw strings, checked in every
+ * decoded/folded surface form. */
+function emailsFromStrings(strings: string[]): Set<string> {
+  const out = new Set<string>();
   for (const raw of strings) {
     for (const form of extractionForms(raw)) {
       for (const match of form.matchAll(EMAIL_PATTERN)) {
-        dest.emails.add(match[0].toLowerCase());
+        out.add(match[0].toLowerCase());
       }
+    }
+  }
+  return out;
+}
+
+/** URL origins present in a set of raw strings, checked in every
+ * decoded/folded surface form. */
+function hostsFromStrings(strings: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const raw of strings) {
+    for (const form of extractionForms(raw)) {
       for (const match of form.matchAll(URL_PATTERN)) {
-        const host = hostOf(match[0]);
-        if (host) {
-          dest.hosts.add(host);
+        const origin = originOf(match[0]);
+        if (origin) {
+          out.add(origin);
         }
       }
     }
   }
-  return dest;
+  return out;
 }
 
-/** Every destination a downstream tool would consume from a call's arguments. */
-export function extractCallDestinations(args: unknown): Destinations {
-  return extractFromStrings(collectLeafStrings(args));
+/** Extract every email address and URL origin present in a set of raw strings. */
+function extractFromStrings(strings: string[]): Destinations {
+  return { emails: emailsFromStrings(strings), hosts: hostsFromStrings(strings) };
+}
+
+/**
+ * The destinations a tool would actually transmit to, per an explicit,
+ * documented per-tool contract kept in lock-step with the differential tool
+ * oracle so the two independent implementations agree on ground truth:
+ *
+ *   - send_email (and its aliases) transmits to email RECIPIENTS. Any email
+ *     address in the arguments, at any depth, counts — this is a deliberately
+ *     CONSERVATIVE, lenient-mailer model: bcc/cc/nested/serialized addresses are
+ *     all treated as recipients (which is exactly the smuggling surface), even a
+ *     bare address in a body field. It is not a precise recipient-key schema; it
+ *     errs toward extracting an address rather than missing a smuggled one. A
+ *     URL in the arguments is payload (a link in the body), NOT a destination:
+ *     this tool sends mail, it does not fetch URLs.
+ *   - http_post (and its aliases) transmits to the URL HOST(s) it posts to. An
+ *     email address in its arguments is body payload, NOT a destination.
+ *   - any other tool carries no email/host egress destination here; the generic
+ *     provenance/user-session gates decide it. An unknown tool is never
+ *     positively authorized on egress grounds.
+ *
+ * The tool is resolved through the shared egress-contract resolver
+ * (src/tool-contracts.ts), which maps every documented alias to a canonical
+ * tool — so `send_http`/`http_request` are network tools whose HOSTS are
+ * extracted, not email tools (a `/^send_/` guess would misclassify them and
+ * mask an unauthorized host). Extracting a value the tool does not act on would
+ * be a false positive; a deployment whose tool consumes a further destination
+ * field (e.g. a mailer that fires a delivery webhook) must widen the contract,
+ * and the oracle, together.
+ */
+export function extractCallDestinations(actionName: string, args: unknown): Destinations {
+  const leaves = collectLeafStrings(args);
+
+  switch (egressContract(actionName)) {
+    case 'email':
+      return { emails: emailsFromStrings(leaves), hosts: new Set<string>() };
+    case 'network':
+      return { emails: new Set<string>(), hosts: hostsFromStrings(leaves) };
+    default:
+      return emptyDestinations();
+  }
 }
 
 /** Destinations the user explicitly named in their own (actionable) session
@@ -259,108 +323,102 @@ export interface EgressAuthorizationResult {
   unauthorized: string[];
 }
 
-/**
- * Per-destination-kind authorization. Given the destinations of one kind
- * (email or host) the call carries and the ones the user authorized, decide
- * whether the call may proceed.
- *
- * Three outcomes:
- *  - 'authorized'     : every destination is one the user named, OR the call
- *                       is the single benign-delegation shape (see below).
- *  - 'block'          : the user named specific destinations of this kind and
- *                       the call carries at least one MORE — the extra one is
- *                       an off-intent/exfiltration target. This is the case the
- *                       generic provenance gates cannot see (the authorized
- *                       recipient masks the smuggled one), so egress must block
- *                       it outright.
- *  - 'not-applicable' : cannot positively authorize, but not a clear smuggle
- *                       either (a lone synthesized recipient with no user-named
- *                       set). Defer to the generic fail-closed gates, which
- *                       already block a sensitive action lacking user intent.
- *
- * Benign delegation (the "email my manager" case) requires ALL of: the user
- * named no destination of this kind, the call has exactly one, the user
- * expressed intent to perform the action, the inert context is clean of any
- * send instruction or address hint, and the lone destination does not trace to
- * an untrusted span. An attacker cannot satisfy it: a smuggled destination
- * arrives either beside a user-named one (blocked) or out of untrusted content
- * (which makes the inert context unclean / trips the trace check).
- */
-function evaluateKind(
-  kind: 'email' | 'host',
-  callSet: Set<string>,
-  userSet: Set<string>,
-  spans: Span[]
-): EgressAuthorizationResult {
-  if (callSet.size === 0) {
-    return { decision: 'not-applicable', reason: '', unauthorized: [] };
-  }
+interface TypedDestination {
+  kind: 'email' | 'host';
+  value: string;
+}
 
-  const unauthorized = [...callSet].filter((value) => !userSet.has(value));
-  if (unauthorized.length === 0) {
-    return {
-      decision: 'authorized',
-      reason: `All ${kind} destinations are authorized by the user session.`,
-      unauthorized: []
-    };
-  }
-
-  if (userSet.size > 0) {
-    // The user named specific destinations; anything beyond them is smuggled.
-    return {
-      decision: 'block',
-      reason: `Blocked because the call carries ${kind} destination(s) the user never authorized: ${unauthorized.join(', ')}.`,
-      unauthorized
-    };
-  }
-
-  const isBenignDelegation =
-    callSet.size === 1 &&
-    userExpressedSendIntent(spans) &&
-    inertContextIsClean(spans) &&
-    !destinationTracesToTrust(unauthorized[0]!, spans, 'inert');
-
-  if (isBenignDelegation) {
-    return {
-      decision: 'authorized',
-      reason: `Single ${kind} destination resolved from an explicit user request over a clean untrusted context.`,
-      unauthorized: []
-    };
-  }
-
-  // A lone, unauthorized destination with no user-named set: not a provable
-  // smuggle, but not authorized either. Defer to the generic gates.
-  return { decision: 'not-applicable', reason: '', unauthorized: [] };
+function typedDestinations(dest: Destinations): TypedDestination[] {
+  return [
+    ...[...dest.emails].map((value): TypedDestination => ({ kind: 'email', value })),
+    ...[...dest.hosts].map((value): TypedDestination => ({ kind: 'host', value }))
+  ];
 }
 
 /**
  * Authorize the egress destinations of a sensitive tool call against the user
- * session. Returns:
- *   - 'block'          : at least one destination is unauthorized (exfiltration).
- *   - 'authorized'     : every destination is justified by the user.
- *   - 'not-applicable' : the call carries no email/host destination, so this
- *                        check has nothing to say (caller falls back to the
- *                        generic provenance/user-session gates).
+ * session, evaluating EVERY destination across EVERY kind together (never one
+ * kind at a time). A call is authorized only when every extracted destination
+ * — email or host, at any depth — is one the user positively authorized; a
+ * single authorized destination of one kind can never license an unauthorized
+ * destination of another kind. This closes the cross-kind masking bypass where
+ * an authorized recipient rode alongside an unauthorized callback host.
+ *
+ * Returns:
+ *   - 'block'          : at least one destination is unauthorized AND the call
+ *                        is not the benign single-delegation shape — either the
+ *                        user named some destination (so any extra is smuggled)
+ *                        or the call carries more than one destination (so it
+ *                        cannot be a lone delegation). Fail-closed.
+ *   - 'authorized'     : every destination is justified — all user-named, or the
+ *                        whole call is the single benign-delegation shape.
+ *   - 'not-applicable' : the call carries no destination, OR a single
+ *                        unauthorized destination with no user-named set that is
+ *                        not delegation-eligible. Defer to the generic
+ *                        provenance/user-session gates (which already block a
+ *                        synthesized-recipient send, with a precise reason).
+ *
+ * Benign delegation (the "email my manager" case) requires ALL of: the user
+ * named no destination of any kind, the call carries exactly one destination
+ * total, the user expressed intent to perform the action, the inert context is
+ * clean of any send instruction or address hint, and that lone destination does
+ * not trace to an untrusted span. An attacker cannot satisfy it: a smuggled
+ * destination arrives either beside a user-named one (blocked), as a second
+ * destination (blocked), or out of untrusted content (unclean inert / trips the
+ * trace check).
  */
-export function egressAuthorizationCheck(args: unknown, spans: Span[]): EgressAuthorizationResult {
-  const call = extractCallDestinations(args);
+export function egressAuthorizationCheck(actionName: string, args: unknown, spans: Span[]): EgressAuthorizationResult {
+  const call = extractCallDestinations(actionName, args);
   const user = extractUserDestinations(spans);
 
-  const emailResult = evaluateKind('email', call.emails, user.emails, spans);
-  if (emailResult.decision === 'block') {
-    return emailResult;
-  }
-  const hostResult = evaluateKind('host', call.hosts, user.hosts, spans);
-  if (hostResult.decision === 'block') {
-    return hostResult;
+  const dests = typedDestinations(call);
+  if (dests.length === 0) {
+    return { decision: 'not-applicable', reason: '', unauthorized: [] };
   }
 
-  if (emailResult.decision === 'authorized' || hostResult.decision === 'authorized') {
-    const reasons = [emailResult, hostResult]
-      .filter((result) => result.decision === 'authorized')
-      .map((result) => result.reason);
-    return { decision: 'authorized', reason: reasons.join(' '), unauthorized: [] };
+  const userNamedAny = user.emails.size + user.hosts.size > 0;
+  const isAuthorized = (d: TypedDestination): boolean =>
+    (d.kind === 'email' ? user.emails : user.hosts).has(d.value);
+  const unauthorized = dests.filter((d) => !isAuthorized(d));
+
+  if (unauthorized.length === 0) {
+    return {
+      decision: 'authorized',
+      reason: 'All egress destinations are authorized by the user session.',
+      unauthorized: []
+    };
   }
 
-  return { decision: 'not-applicable', reason: '', unauthorized: [] };
+  const isBenignDelegation =
+    dests.length === 1 &&
+    !userNamedAny &&
+    userExpressedSendIntent(spans) &&
+    inertContextIsClean(spans) &&
+    !destinationTracesToTrust(unauthorized[0]!.value, spans, 'inert');
+
+  if (isBenignDelegation) {
+    return {
+      decision: 'authorized',
+      reason: 'Single egress destination resolved from an explicit user request over a clean untrusted context.',
+      unauthorized: []
+    };
+  }
+
+  // Smuggle: the user named a destination (so any unauthorized one is an
+  // extra), or the call carries more than one destination (so it cannot be a
+  // lone delegation and at least one is unauthorized). Block outright.
+  if (userNamedAny || dests.length > 1) {
+    return {
+      decision: 'block',
+      reason: `Blocked because the call carries egress destination(s) the user never authorized: ${unauthorized
+        .map((d) => d.value)
+        .join(', ')}.`,
+      unauthorized: unauthorized.map((d) => d.value)
+    };
+  }
+
+  // A single unauthorized destination, user named nothing, not delegation-
+  // eligible: not a provable smuggle. Defer to the generic fail-closed gates
+  // so they can block it with their specific provenance/intent reason.
+  return { decision: 'not-applicable', reason: '', unauthorized: unauthorized.map((d) => d.value) };
 }
