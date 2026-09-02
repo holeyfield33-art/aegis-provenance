@@ -49,7 +49,11 @@ from the release tag. Do not repeat this.
 The supported way to guarantee it is the `release` workflow
 (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag builds and publishes
 from exactly that commit and attaches **npm build provenance**
-(`npm publish --provenance`). A manual `npm publish` from a laptop does **not**
+(`npm publish --provenance`). The workflow **fails** if the git tag does not
+equal `v` + the `package.json` version, so npm, tag and release cannot drift.
+Running the workflow manually (`workflow_dispatch`) is a **dry run only** — it
+runs the full gate and builds/packs but never publishes, so a manual run cannot
+push an arbitrary branch to npm. A manual `npm publish` from a laptop does **not**
 get trusted-publisher provenance — prefer the workflow.
 
 If you must publish manually:
@@ -67,8 +71,10 @@ These are GitHub settings, not code, and must be configured by a repo admin:
 
 - **Branch protection on `main`:** require the `ci` and `benchmark` checks to
   pass, require PR review, and disallow direct pushes.
-- **npm trusted publisher** (or an `NPM_TOKEN` secret) for the `release`
-  workflow, so provenance can be attached.
+- **npm trusted publisher** for this repo + the `release` workflow, so
+  provenance can be attached via OIDC. The workflow deliberately has **no
+  token fallback**: if trusted publishing is not configured, the publish step
+  fails loudly rather than silently using a long-lived token.
 
 ## Not shipped to consumers
 

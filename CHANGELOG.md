@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security (cross-kind egress masking, audit follow-up)**: egress
+  authorization evaluated email recipients and URL hosts independently and
+  authorized the whole call if *either* kind was satisfied, so an authorized
+  email recipient masked an unauthorized callback host (and vice versa) —
+  reintroducing the "one authorized destination masks another" bypass in
+  cross-kind form. Authorization is now evaluated over every destination across
+  every kind together: a call is authorized only when *every* extracted
+  destination is user-authorized. Added symmetric regression tests and a new
+  `attacks/mixed-destination/` fixture category.
+- **Security (network destination granularity, audit follow-up)**: URL
+  authorization compared bare hostname, so authorizing `https://host/status`
+  also permitted `https://host:444/admin` or an `http://` downgrade.
+  Destinations are now matched at **origin** granularity (scheme + host + port);
+  path remains intentionally unbound (documented in the threat model).
+- **Packaging (audit follow-up)**: `npm run build` now runs a path-validated
+  `clean` step first, so a stale `dist/testing` directory from an earlier build
+  layout can no longer survive into a manual publish. The package smoke test now
+  inspects the actual packed tarball (`tar -tzf`) instead of a second
+  `npm pack --dry-run`.
+- **Release workflow (audit follow-up, #6)**: `workflow_dispatch` runs are now
+  dry-run only (gate + build, never publish); publication happens only on a
+  `vX.Y.Z` tag push and fails unless the tag equals `v` + the `package.json`
+  version. Removed the silent OIDC→token fallback; trusted publishing only.
 - **Security (recipient/destination authorization, #27/#28/#29)**: a sensitive
   egress call (`send_email`, `http_post`) that carried an authorized recipient
   *plus* an extra, unauthorized destination — a BCC/CC, a nested routing field,

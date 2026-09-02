@@ -98,10 +98,23 @@ If you build on Aegis, you can rely on the following:
    content is in scope, this fallback is disabled and stronger evidence is
    required. As you add connectors, the situations where this fallback applies
    shrink toward zero — plan for user intent to be expressed explicitly.
-5. **`block` throws; `flag` and `allow` return.** A blocked action raises
+5. **Every egress destination must be authorized.** For a sensitive egress call
+   (`send_email`, `http_post`, …), Aegis extracts *every* destination the
+   arguments carry — email addresses and URL origins, at any depth, through
+   nested objects/arrays, JSON-in-string (incl. double-escaped), header-injected
+   lines, comma/newline lists, and behind homoglyph/percent/base64/hex/rot13
+   obfuscation — and requires each one to be authorized by the user session.
+   Authorization is evaluated across **all** destination kinds together: an
+   authorized email can never license an unauthorized callback host, and vice
+   versa. Network destinations are matched at **origin** granularity (scheme +
+   host + port); a non-default port or a scheme downgrade is a different,
+   unauthorized origin. The URL **path is intentionally not bound** — authorizing
+   an origin authorizes all paths on it (a webhook/status endpoint is authorized
+   as a host); applications needing per-path control must enforce it downstream.
+6. **`block` throws; `flag` and `allow` return.** A blocked action raises
    `AegisBlockedError` carrying the receipt ID. Flags are advisory and do not
    halt execution — they are for the receipt trail and human review.
-6. **Set a persistent signing key in production.** With no `AEGIS_SIGNING_KEY`
+7. **Set a persistent signing key in production.** With no `AEGIS_SIGNING_KEY`
    (or `AEGIS_SIGNING_KEY_FILE`), Aegis generates an ephemeral per-process key.
    Span signatures then cannot be verified across restarts or processes. For any
    deployment that persists or transports spans, set a stable key.
@@ -124,6 +137,13 @@ alongside any "launch-ready" claim.
   write access to the receipt store can recompute the entire chain. External
   anchoring / signed receipts is a roadmap item; until then, treat the store as
   needing its own integrity controls.
+- **Receipt append serialization is per-`ReceiptStore` instance, per process.**
+  Concurrent appends *through one `ReceiptStore`* are serialized so they cannot
+  fork the chain. Two `ReceiptStore` instances — or two processes — writing the
+  same file concurrently can still race; the chain-verification-before-append
+  detects the resulting corruption on the next append but does not prevent it.
+  For multi-writer deployments, put a single writer in front of the store or use
+  an external lock.
 - **Aegis gates egress, it does not sandbox execution.** A `flag` verdict does
   not stop anything. If your tools have side effects, a flagged-but-not-blocked
   action still runs.

