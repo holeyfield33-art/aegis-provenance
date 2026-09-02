@@ -58,10 +58,12 @@ export interface SpanIntegrityResult {
   reason?: string;
 }
 
-// Verify-on-use: the signature covers origin/source_uri/ingested_at/content,
-// but trust is derived state — it must be recomputed from origin here, never
-// read back from the stored field, or a wire-tampered span could carry an
-// escalated trust value past a valid signature.
+// Verify-on-use: the v2 signature covers id/origin/trust/source_uri/
+// parent_span/ingested_at/content, so tampering with any of them (trust
+// included) now breaks the signature directly. Trust is still re-derived from
+// origin here as defense-in-depth — a belt-and-suspenders invariant that a
+// span's stored trust must equal what its origin implies, independent of the
+// signature layer.
 export function verifySpanIntegrity(span: Span, publicKey: Uint8Array): SpanIntegrityResult {
   if (!verifySpan(span, publicKey)) {
     return { valid: false, reason: `Span ${span.id} failed signature verification.` };

@@ -7,10 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-08-12
+## [0.1.1] - 2026-09-02
 
 ### Fixed
 
+- **Security (recipient/destination authorization, #27/#28/#29)**: a sensitive
+  egress call (`send_email`, `http_post`) that carried an authorized recipient
+  *plus* an extra, unauthorized destination — a BCC/CC, a nested routing field,
+  a JSON-in-string blob, a header-injected `Bcc:` line, a CSV list, an array
+  element, or an encoded/homoglyph address — was allowed, because the authorized
+  recipient supplied user intent and the smuggled destination need not appear in
+  any span. New `src/egress.ts` extracts every destination a downstream tool
+  would actually consume (deep traversal, JSON-in-string incl. double-escaped,
+  comma/newline lists, homoglyph folding, percent/base64/hex/rot13 decoding) and
+  requires each to be authorized by the user session. The independent
+  differential benchmark's dangerous false negatives went from 21 (23.6% FN
+  rate) to **0 (100% recall)**; the genuine over-block rate dropped to 7.7%.
+- **Security (span identity, finding #2)**: the Ed25519 span signature did not
+  cover `span.id`, so an attacker holding a serialized signed span could rewrite
+  its id — its identity in provenance matches and receipts — without
+  invalidating the signature. The signed payload is now versioned
+  (`aegis-span-sig-v2`) and binds `id`, `trust`, and `parent_span` in addition
+  to origin/source_uri/ingested_at/content. Tamper tests cover every
+  security-relevant span field.
+- **Security (receipt chain concurrency, #10)**: `ReceiptStore.appendReceipt`
+  was read-modify-write with no serialization, so two concurrent appends could
+  read the same chain tail and write receipts referencing the same previous
+  hash, forking the chain. Appends are now serialized per store; a concurrency
+  test fires 25 simultaneous appends and asserts a single valid chain with
+  distinct predecessors.
+- **Tooling / usability (#32, partial)**: the harness now resolves a
+  case/punctuation variant of a registered tool name (`SendEmail`,
+  `send-email`) to its canonical registered tool instead of rejecting it, while
+  a genuinely different name still fails closed. Broader semantic aliasing
+  remains a documented limitation.
 - **Security**: `argumentProvenanceMatch` aggregated the actionable/inert
   match signal across all argument values in a tool call into a single
   flag, so one benign argument value that happened to match a trusted
@@ -67,6 +97,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Release gate (finding #4)**: the differential adversarial benchmark now has
+  an explicit, machine-checked threshold (`RELEASE_GATE`): 0 false negatives, 0
+  crashes, and effect false-positive rate ≤ 10%. It runs in CI
+  (`npm run benchmark:differential:gate`) and in `prepublishOnly`, so a green
+  build means the adversarial suite passed, not only the older provenance
+  regression suite.
+- **Packaging (finding #7)**: `src/testing/**` (differential, tool-oracle,
+  real-model harnesses) is excluded from the published `dist`; the tarball ships
+  only `dist/` (sans testing), `README.md`, and `LICENSE`. A clean-pack smoke
+  test (`npm run smoke:package`) packs, installs into an isolated consumer,
+  imports the ESM entrypoint, and asserts the surface — wired into CI and
+  `prepublishOnly`.
+- **CI hardening (finding #7)**: GitHub Actions are pinned by full commit SHA
+  instead of floating `@v4` tags. A provenance-producing `release` workflow
+  (`npm publish --provenance`) and a `RELEASING.md` checklist were added so the
+  npm package, git tag, and GitHub Release identify the same commit (finding
+  #6) and the package can carry trusted-publisher provenance.
 - Benchmark and README documentation now state explicitly that
   `npm run benchmark` measures provenance/sensitivity enforcement against a
   fixed, deterministic surrogate — not real-model injection resistance or an

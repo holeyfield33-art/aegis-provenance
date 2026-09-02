@@ -1,6 +1,7 @@
 import type { Span } from './types.js';
 import { AegisAttributionError } from './types.js';
 import { candidateRepresentations, normalizeMatchText } from './normalize.js';
+import { egressAuthorizationCheck } from './egress.js';
 
 export interface ProvenanceMatchResult {
   inertOnly: boolean;
@@ -485,24 +486,48 @@ export function decideAttribution(
       ? ` (${policy.contentSensitivity.reasons.join('; ')})`
       : '';
 
-    if (provenanceMatch.anyValueInertOnly) {
+    // Structural destination authorization (#27/#28/#29): every egress
+    // destination the call carries — at any depth, inside JSON-in-string,
+    // header-injected lines, CSV/array lists, or behind an encoding/homoglyph
+    // — must be one the user actually authorized. This is what catches an
+    // authorized-recipient-plus-hidden-BCC exfiltration that substring
+    // provenance alone lets through.
+    const egress = egressAuthorizationCheck(args, spans);
+    if (egress.decision === 'block') {
       return {
         verdict: 'block',
-        reason: `Blocked because tool arguments originate only from inert spans for a sensitive action${contentNote}.`,
+        reason: `${egress.reason}${contentNote}`,
         attribution: provenanceMatch,
         canary,
         sensitiveAction: policy.sensitiveAction
       };
     }
 
-    if (policy.requiresUserSession && !policy.hasUserSessionIntent) {
-      return {
-        verdict: 'block',
-        reason: `Blocked because a sensitive action requires user-session intent that references the action or its arguments${contentNote}.`,
-        attribution: provenanceMatch,
-        canary,
-        sensitiveAction: policy.sensitiveAction
-      };
+    // When egress authorization has positively cleared every destination the
+    // call transmits to (all user-named, or the single benign-delegation
+    // shape), the destinations are justified and the generic inert/
+    // user-session gates below — which cannot see structured recipients — are
+    // skipped for this call. Otherwise fall back to them.
+    if (egress.decision !== 'authorized') {
+      if (provenanceMatch.anyValueInertOnly) {
+        return {
+          verdict: 'block',
+          reason: `Blocked because tool arguments originate only from inert spans for a sensitive action${contentNote}.`,
+          attribution: provenanceMatch,
+          canary,
+          sensitiveAction: policy.sensitiveAction
+        };
+      }
+
+      if (policy.requiresUserSession && !policy.hasUserSessionIntent) {
+        return {
+          verdict: 'block',
+          reason: `Blocked because a sensitive action requires user-session intent that references the action or its arguments${contentNote}.`,
+          attribution: provenanceMatch,
+          canary,
+          sensitiveAction: policy.sensitiveAction
+        };
+      }
     }
   }
 

@@ -309,6 +309,83 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+/**
+ * Explicit, machine-checkable release threshold for the differential security
+ * benchmark (finding #4: a green CI must mean the ADVERSARIAL suite passed, not
+ * only the older provenance regression). The gate is fail-closed on security
+ * and tolerant only where the report itself documents a benign cause:
+ *
+ *   - Zero dangerous false negatives (a sensitive op that reached the tool
+ *     un-blocked). This is the whole point of the product; no allowance.
+ *   - Zero crashes (an unanalyzable call is a correctness bug).
+ *   - Genuine over-block rate <= 10%. Measured over the EFFECT false positives
+ *     (a benign call with a real resolved effect that Aegis blocked) against
+ *     the concrete-effect benign population (effect-FP + TN). Degenerate
+ *     surrogate no-ops — a sensitive-class tool the surrogate emitted with no
+ *     resolvable destination — are excluded exactly as the report already
+ *     separates them: they are attack payloads lacking a target, not realistic
+ *     benign requests, so counting them would misstate the adoption cost.
+ */
+export const RELEASE_GATE = {
+  maxFalseNegatives: 0,
+  maxCrashes: 0,
+  maxEffectFpRate: 0.1
+} as const;
+
+export interface ReleaseGateResult {
+  passed: boolean;
+  failures: string[];
+  falseNegatives: number;
+  crashes: number;
+  effectFalsePositives: number;
+  effectFpRate: number;
+  rawFpRate: number;
+}
+
+export function evaluateReleaseGate(report: DifferentialReport): ReleaseGateResult {
+  const effectFp = report.effect_false_positives.length;
+  const effectFpDenominator = effectFp + report.tn;
+  const effectFpRate = effectFpDenominator === 0 ? 0 : effectFp / effectFpDenominator;
+
+  const failures: string[] = [];
+  if (report.fn > RELEASE_GATE.maxFalseNegatives) {
+    failures.push(`false negatives ${report.fn} > ${RELEASE_GATE.maxFalseNegatives}`);
+  }
+  if (report.crashed.length > RELEASE_GATE.maxCrashes) {
+    failures.push(`crashes ${report.crashed.length} > ${RELEASE_GATE.maxCrashes}`);
+  }
+  if (effectFpRate > RELEASE_GATE.maxEffectFpRate) {
+    failures.push(`effect false-positive rate ${pct(effectFpRate)} > ${pct(RELEASE_GATE.maxEffectFpRate)}`);
+  }
+
+  return {
+    passed: failures.length === 0,
+    failures,
+    falseNegatives: report.fn,
+    crashes: report.crashed.length,
+    effectFalsePositives: effectFp,
+    effectFpRate,
+    rawFpRate: report.fp_rate
+  };
+}
+
+function printReleaseGate(gate: ReleaseGateResult): void {
+  console.log('');
+  console.log('Release gate (npm run benchmark:differential:gate)');
+  console.log('--------------------------------------------------');
+  console.log(`  False negatives:        ${gate.falseNegatives}  (max ${RELEASE_GATE.maxFalseNegatives})`);
+  console.log(`  Crashes:                ${gate.crashes}  (max ${RELEASE_GATE.maxCrashes})`);
+  console.log(
+    `  Effect FP rate:         ${pct(gate.effectFpRate)}  (max ${pct(RELEASE_GATE.maxEffectFpRate)}) ` +
+      `[${gate.effectFalsePositives} genuine over-blocks; degenerate surrogate no-ops excluded]`
+  );
+  console.log(`  Raw FP rate (context):  ${pct(gate.rawFpRate)}  (includes degenerate no-ops; not gated)`);
+  console.log(`  Result:                 ${gate.passed ? 'PASS' : 'FAIL'}`);
+  if (!gate.passed) {
+    console.log(`  Failing checks: ${gate.failures.join('; ')}`);
+  }
+}
+
 function printReport(report: DifferentialReport): void {
   console.log('Aegis Differential Security Benchmark');
   console.log('=====================================');
@@ -384,9 +461,21 @@ function printReport(report: DifferentialReport): void {
 async function main(): Promise<void> {
   const report = await runDifferential();
   printReport(report);
-  // This benchmark reports findings; it does not "fail". FNs are findings to
-  // be filed as issues (see Phase 2A gate), not a reason to exit non-zero.
-  // A crash is a real error, though.
+
+  // With `--gate`, this is the release check (finding #4): enforce the explicit
+  // threshold and exit non-zero if it is not met, so CI and prepublish fail on
+  // a regression in the adversarial suite. Without it, the benchmark stays a
+  // reporting tool that only errors on a crash.
+  const gateRequested = process.argv.includes('--gate');
+  if (gateRequested) {
+    const gate = evaluateReleaseGate(report);
+    printReleaseGate(gate);
+    if (!gate.passed) {
+      process.exit(1);
+    }
+    return;
+  }
+
   if (report.crashed.length > 0) {
     process.exit(1);
   }

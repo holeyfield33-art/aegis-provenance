@@ -1,0 +1,47 @@
+name: release
+
+# Provenance-producing publication workflow (finding #7). Publishing through
+# this workflow — rather than a manual `npm publish` from a laptop — is what
+# lets npm attach GitHub Actions trusted-publisher provenance to the package,
+# and guarantees the published artifact is built from the exact tagged commit
+# (finding #6: npm, git tag and GitHub Release must identify the same commit).
+#
+# Trigger by pushing a version tag (v*), or manually via the Actions tab. The
+# job runs the full release gate before it publishes, so a release that would
+# regress the adversarial suite cannot go out.
+#
+# Requires (one-time repo setup, documented in RELEASING.md):
+#   - npm trusted publisher configured for this repo/workflow, OR an NPM_TOKEN
+#     secret with publish rights.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance / trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run benchmark
+      - run: npm run benchmark:differential:gate
+      - run: npm run build
+      - run: npm run smoke:package
+      # --provenance attaches a signed build-provenance attestation tying the
+      # tarball to this workflow run and commit.
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

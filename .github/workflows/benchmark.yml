@@ -5,15 +5,22 @@ on:
     branches: [main]
   pull_request:
 
+# Actions pinned by full commit SHA (finding #7).
 jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
       - run: npm ci
-      # Fails the job if accuracy < 95% or any fixture crashes the pipeline.
+      # Original provenance regression suite: fails if accuracy < 95% or any
+      # fixture crashes the pipeline.
       - run: npm run benchmark
+      # Adversarial differential suite under the explicit release gate: fails on
+      # any dangerous false negative, any crash, or an effect-FP rate above the
+      # threshold. A green benchmark job now means the ADVERSARIAL corpus passed,
+      # not only the older provenance suite (finding #4).
+      - run: npm run benchmark:differential:gate

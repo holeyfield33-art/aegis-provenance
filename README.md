@@ -174,6 +174,15 @@ Aegis uses deterministic signals to decide whether a tool call is safe:
   each span, so a model that decodes an obfuscated span or folds confusable
   characters when repeating it doesn't break the byte-level link the way a
   purely literal substring check would.
+- Destination authorization: for a sensitive egress call, every recipient/host
+  the call would actually transmit to must be one the user authorized. Aegis
+  extracts destinations structurally — through nested objects and arrays, JSON
+  embedded in string fields (including double-escaped), header-injected lines,
+  comma-separated lists, and behind homoglyph/percent/base64/hex/rot13
+  obfuscation — so an authorized recipient can no longer mask a smuggled BCC,
+  nested callback, or serialized extra recipient. A single recipient the user
+  asked for by role ("email my manager") is still allowed when the untrusted
+  context is clean; anything the user did not authorize is blocked.
 
 ### Receipts
 
@@ -283,8 +292,23 @@ behavior. Important limits:
   have been ruled out. Broader adversarial validation against attack corpora
   Aegis wasn't designed against is the appropriate next step before relying
   on it for that claim.
+- Beyond the surrogate benchmark, an independent **differential** benchmark
+  (`npm run benchmark:differential`) scores Aegis's real verdict against a
+  separate tool oracle that models downstream effect, and a machine-checked
+  release gate (`npm run benchmark:differential:gate`) enforces 0 dangerous
+  false negatives, 0 crashes, and a ≤10% genuine over-block rate. The remaining
+  over-blocks are conservative blocks of `search` calls whose *query text* looks
+  like a secret request or identity override — the oracle counts these as benign
+  (a search transmits nothing), while Aegis blocks them as reconnaissance; this
+  is a deliberate fail-closed choice, not an undetected regression.
+- Tool-name resolution normalizes only case/punctuation variants of a
+  *registered* tool (`SendEmail` → `send_email`); it does not perform broader
+  semantic aliasing (`mail`, `notify`), which stays fail-closed rejected (#32).
+  If a model routinely emits a differently-named tool, register it explicitly.
 - The current implementation is Mode A only: in-process harness, no HTTP proxy.
-- Receipt persistence is file-based and intended for demo/testing.
+- Receipt persistence is file-based and intended for demo/testing. Appends are
+  serialized within a process, but concurrent writers in *separate* processes
+  to the same receipt file still require external coordination.
 
 The defence is strongest when used as a safety layer around tool execution,
 not as a sole source of truth for model intent.
