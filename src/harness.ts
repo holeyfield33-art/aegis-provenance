@@ -18,6 +18,12 @@ export interface ModelClient {
   call(messages: ProviderMessage[]): Promise<ModelClientResponse>;
 }
 
+/** Case- and punctuation-insensitive key for matching a model-emitted tool
+ * name against a registered one (`SendEmail` / `send-email` -> `sendemail`). */
+function normalizeToolNameKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 export interface HarnessOptions {
   system: string;
   userMessage: string;
@@ -64,19 +70,36 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
 
   const modelResponse = await options.modelClient.call(assembled.messages);
 
-  const allowedToolNames = new Set(options.tools.map((tool) => tool.name));
+  // Resolve the model's tool name to a registered tool. A real model routinely
+  // emits a case/spacing/punctuation variant of a registered name
+  // (`SendEmail`, `send-email`, `SEND_EMAIL`) for the same tool; rejecting
+  // those outright is an availability cost (#32) with no security benefit,
+  // since the variant still denotes a real registered tool that then runs the
+  // full sensitivity pipeline. Resolution is deliberately conservative: it
+  // matches only on a case/non-alphanumeric-insensitive key, so a genuinely
+  // different name (`mail`, `exfiltrate_now`) still resolves to nothing and is
+  // refused fail-closed. Broader semantic aliasing is intentionally NOT done
+  // here (see #32 / README limitations).
+  const canonicalToolNames = new Map<string, string>();
+  for (const tool of options.tools) {
+    canonicalToolNames.set(normalizeToolNameKey(tool.name), tool.name);
+  }
+
+  let resolvedToolName = modelResponse.tool_name;
   if (modelResponse.type === 'tool_call') {
     if (!modelResponse.tool_name) {
       throw new AegisAttributionError('Model returned a tool_call response without a tool_name.');
     }
-    if (!allowedToolNames.has(modelResponse.tool_name)) {
+    const canonical = canonicalToolNames.get(normalizeToolNameKey(modelResponse.tool_name));
+    if (!canonical) {
       throw new AegisAttributionError(`Model returned an unregistered tool_name: ${modelResponse.tool_name}`);
     }
+    resolvedToolName = canonical;
   }
 
   const action: ModelAction = {
     type: modelResponse.type,
-    tool_name: modelResponse.tool_name,
+    tool_name: resolvedToolName,
     tool_args: modelResponse.tool_args
   };
 

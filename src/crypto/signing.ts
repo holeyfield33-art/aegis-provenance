@@ -29,12 +29,23 @@ export function stableStringify(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
+// Versioned span-signature format. Bump when the signed field set changes so a
+// signature can never be reinterpreted under a different field layout, and so
+// old and new signatures are unambiguously distinguishable.
+//   v1 (legacy): origin | source_uri | ingested_at | content_hash
+//   v2:          id | origin | trust | source_uri | parent_span | ingested_at | content_hash
+// v2 binds the span id (its evidentiary identity) and the parent_span link,
+// closing the gap where an attacker could rewrite a signed span's id — and thus
+// its identity in provenance matches and receipts — without invalidating the
+// signature (finding #2).
+export const SPAN_SIG_VERSION = 'aegis-span-sig-v2';
+
 export function canonicalSpanPayload(span: Omit<Span, 'sig'>): Uint8Array {
-  const origin = span.origin;
   const sourceUri = span.meta.source_uri ?? '';
+  const parentSpan = span.meta.parent_span ?? '';
   const ingestedAt = span.meta.ingested_at;
   const contentHash = sha256Hex(encoder.encode(span.content));
-  const parts = [origin, sourceUri, ingestedAt, contentHash];
+  const parts = [SPAN_SIG_VERSION, span.id, span.origin, span.trust, sourceUri, parentSpan, ingestedAt, contentHash];
   const joined = parts.join('\u0000');
   return encoder.encode(joined);
 }

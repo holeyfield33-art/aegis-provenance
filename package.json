@@ -25,13 +25,15 @@
     "test": "vitest run",
     "benchmark": "tsx ./src/benchmark.ts",
     "benchmark:differential": "tsx ./src/testing/differential.ts",
+    "benchmark:differential:gate": "tsx ./src/testing/differential.ts --gate",
+    "smoke:package": "node ./scripts/package-smoke.mjs",
     "asr:real-model": "tsx ./src/testing/real-model-asr.ts",
     "llm-eval": "tsx ./src/llm-eval.ts",
     "demo": "tsx ./src/demo.ts demo",
     "demo:narrative": "tsx ./examples/demo-narrative.ts",
     "demo:live-agent": "tsx ./examples/live-agent-injection.ts",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run typecheck && npm test"
+    "prepublishOnly": "npm run typecheck && npm test && npm run benchmark && npm run benchmark:differential:gate && npm run build && npm run smoke:package"
   },
   "repository": {
     "type": "git",
