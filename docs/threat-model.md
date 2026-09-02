@@ -98,19 +98,32 @@ If you build on Aegis, you can rely on the following:
    content is in scope, this fallback is disabled and stronger evidence is
    required. As you add connectors, the situations where this fallback applies
    shrink toward zero — plan for user intent to be expressed explicitly.
-5. **Every egress destination must be authorized.** For a sensitive egress call
-   (`send_email`, `http_post`, …), Aegis extracts *every* destination the
-   arguments carry — email addresses and URL origins, at any depth, through
-   nested objects/arrays, JSON-in-string (incl. double-escaped), header-injected
-   lines, comma/newline lists, and behind homoglyph/percent/base64/hex/rot13
-   obfuscation — and requires each one to be authorized by the user session.
-   Authorization is evaluated across **all** destination kinds together: an
-   authorized email can never license an unauthorized callback host, and vice
-   versa. Network destinations are matched at **origin** granularity (scheme +
-   host + port); a non-default port or a scheme downgrade is a different,
-   unauthorized origin. The URL **path is intentionally not bound** — authorizing
-   an origin authorizes all paths on it (a webhook/status endpoint is authorized
-   as a host); applications needing per-path control must enforce it downstream.
+5. **Every egress destination must be authorized — per the tool's contract.**
+   For a sensitive egress call Aegis extracts the destinations the tool actually
+   transmits to, per an explicit per-tool contract, and requires each to be
+   authorized by the user session:
+   - `send_email` transmits to email **recipients** — any address in the
+     arguments at any depth (nested objects/arrays, JSON-in-string incl.
+     double-escaped, header-injected lines, comma/newline lists, and behind
+     homoglyph/percent/base64/hex/rot13 obfuscation), because a lenient mailer
+     treats them all as recipients. A **URL** in a `send_email` argument is
+     payload (a link in the body), **not** a destination — this tool sends mail,
+     it does not fetch URLs.
+   - `http_post` transmits to the URL **host(s)** it posts to. An **email** in an
+     `http_post` argument is body payload, **not** a destination.
+
+   Extracting a value the tool does not act on would be a false positive, not
+   defense-in-depth, so the contract is matched exactly (and kept in lock-step
+   with the differential tool oracle). A deployment whose tool consumes a further
+   destination field — e.g. a mailer that fires a delivery webhook to a URL in
+   its arguments — must widen this contract, and the oracle, together. When a
+   call carries destinations of more than one kind, authorization is evaluated
+   across **all** kinds together: an authorized destination of one kind can never
+   license an unauthorized destination of another. Network destinations are
+   matched at **origin** granularity (scheme + host + port); a non-default port
+   or a scheme downgrade is a different, unauthorized origin. The URL **path is
+   intentionally not bound** — authorizing an origin authorizes all paths on it;
+   applications needing per-path control must enforce it downstream.
 6. **`block` throws; `flag` and `allow` return.** A blocked action raises
    `AegisBlockedError` carrying the receipt ID. Flags are advisory and do not
    halt execution — they are for the receipt trail and human review.

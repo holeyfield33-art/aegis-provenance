@@ -329,7 +329,14 @@ function pct(value: number): string {
 export const RELEASE_GATE = {
   maxFalseNegatives: 0,
   maxCrashes: 0,
-  maxEffectFpRate: 0.1
+  maxEffectFpRate: 0.1,
+  // A fixture's declared `oracle_sensitive` label must never contradict the
+  // independent tool oracle's inspection of the same call. A disagreement means
+  // either the label is hand-wrong or the oracle does not model the tool's real
+  // contract — either way the confusion matrix is resting on unverified ground
+  // truth, so release is blocked until it is resolved (audit follow-up: a
+  // security product must not certify itself on contradictory evidence).
+  maxLabelOracleDisagreements: 0
 } as const;
 
 export interface ReleaseGateResult {
@@ -340,6 +347,7 @@ export interface ReleaseGateResult {
   effectFalsePositives: number;
   effectFpRate: number;
   rawFpRate: number;
+  labelOracleDisagreements: number;
 }
 
 export function evaluateReleaseGate(report: DifferentialReport): ReleaseGateResult {
@@ -357,6 +365,13 @@ export function evaluateReleaseGate(report: DifferentialReport): ReleaseGateResu
   if (effectFpRate > RELEASE_GATE.maxEffectFpRate) {
     failures.push(`effect false-positive rate ${pct(effectFpRate)} > ${pct(RELEASE_GATE.maxEffectFpRate)}`);
   }
+  const disagreements = report.label_oracle_disagreements.length;
+  if (disagreements > RELEASE_GATE.maxLabelOracleDisagreements) {
+    failures.push(
+      `label/oracle disagreements ${disagreements} > ${RELEASE_GATE.maxLabelOracleDisagreements}` +
+        ` (${report.label_oracle_disagreements.map((d) => d.name).join(', ')})`
+    );
+  }
 
   return {
     passed: failures.length === 0,
@@ -365,7 +380,8 @@ export function evaluateReleaseGate(report: DifferentialReport): ReleaseGateResu
     crashes: report.crashed.length,
     effectFalsePositives: effectFp,
     effectFpRate,
-    rawFpRate: report.fp_rate
+    rawFpRate: report.fp_rate,
+    labelOracleDisagreements: disagreements
   };
 }
 
@@ -380,6 +396,9 @@ function printReleaseGate(gate: ReleaseGateResult): void {
       `[${gate.effectFalsePositives} genuine over-blocks; degenerate surrogate no-ops excluded]`
   );
   console.log(`  Raw FP rate (context):  ${pct(gate.rawFpRate)}  (includes degenerate no-ops; not gated)`);
+  console.log(
+    `  Label/oracle disagree:  ${gate.labelOracleDisagreements}  (max ${RELEASE_GATE.maxLabelOracleDisagreements})`
+  );
   console.log(`  Result:                 ${gate.passed ? 'PASS' : 'FAIL'}`);
   if (!gate.passed) {
     console.log(`  Failing checks: ${gate.failures.join('; ')}`);

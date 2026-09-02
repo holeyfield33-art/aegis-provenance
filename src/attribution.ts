@@ -492,7 +492,7 @@ export function decideAttribution(
     // — must be one the user actually authorized. This is what catches an
     // authorized-recipient-plus-hidden-BCC exfiltration that substring
     // provenance alone lets through.
-    const egress = egressAuthorizationCheck(args, spans);
+    const egress = egressAuthorizationCheck(actionName, args, spans);
     if (egress.decision === 'block') {
       return {
         verdict: 'block',

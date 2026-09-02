@@ -10,7 +10,7 @@
 // Exits non-zero on any failure. No external dependencies; Node >= 20.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -36,10 +36,23 @@ try {
   console.log('Package smoke test');
   console.log('------------------');
 
-  // 1. Pack the package as it would be published. Find the produced tarball by
-  //    globbing the pack destination rather than parsing `npm pack` stdout,
-  //    which can carry interleaved lifecycle-script output.
-  run('npm', ['pack', '--pack-destination', workDir], ROOT);
+  // 0. REGRESSION: plant a stale artifact from an earlier build layout. `npm
+  //    pack` can select its file list BEFORE `prepack` runs, so relying on
+  //    prepack's clean to drop a pre-existing `dist/testing/` is not reliable
+  //    across npm versions. The correct sequence is an EXPLICIT build (which
+  //    cleans dist first) followed by `npm pack --ignore-scripts` (which packs
+  //    that exact, freshly-built dist without re-running the lifecycle). If this
+  //    stale file ends up in the tarball, the check below fails loudly.
+  const staleFile = join(ROOT, 'dist', 'testing', 'stale.js');
+  mkdirSync(join(ROOT, 'dist', 'testing'), { recursive: true });
+  writeFileSync(staleFile, '// planted stale artifact — must NOT be published\n');
+  console.log('  ..   planted stale dist/testing/stale.js as a regression');
+
+  // 1. Build fresh (cleans dist, removing the planted stale file), then pack the
+  //    exact built output without re-triggering lifecycle scripts. Find the
+  //    tarball by globbing rather than parsing stdout.
+  run('npm', ['run', 'build'], ROOT);
+  run('npm', ['pack', '--ignore-scripts', '--pack-destination', workDir], ROOT);
   const tarballs = readdirSync(workDir).filter((f) => f.endsWith('.tgz'));
   check(tarballs.length === 1, `packed exactly one tarball (found ${tarballs.length})`);
   const tarballName = tarballs[0];

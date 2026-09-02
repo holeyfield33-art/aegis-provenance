@@ -11,29 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Security (cross-kind egress masking, audit follow-up)**: egress
-  authorization evaluated email recipients and URL hosts independently and
-  authorized the whole call if *either* kind was satisfied, so an authorized
-  email recipient masked an unauthorized callback host (and vice versa) —
-  reintroducing the "one authorized destination masks another" bypass in
-  cross-kind form. Authorization is now evaluated over every destination across
-  every kind together: a call is authorized only when *every* extracted
-  destination is user-authorized. Added symmetric regression tests and a new
-  `attacks/mixed-destination/` fixture category.
+- **Security (egress destinations follow a per-tool contract, audit
+  follow-up)**: egress destination extraction is now tool-aware and matches the
+  tool's actual contract, kept in lock-step with the differential tool oracle.
+  `send_email` transmits to email recipients (any address, at any depth) — a URL
+  in its arguments is body payload, not a destination; `http_post` transmits to
+  URL hosts — an email in its arguments is payload. This corrects an earlier
+  over-broad extraction that treated any email/URL in any egress call as a
+  destination, which over-blocked ignored payload fields and forced
+  hand-declared oracle labels that contradicted the independent oracle. When a
+  call carries destinations of more than one kind, authorization is evaluated
+  across all kinds together (an authorized destination of one kind never
+  licenses an unauthorized one of another).
 - **Security (network destination granularity, audit follow-up)**: URL
   authorization compared bare hostname, so authorizing `https://host/status`
   also permitted `https://host:444/admin` or an `http://` downgrade.
   Destinations are now matched at **origin** granularity (scheme + host + port);
   path remains intentionally unbound (documented in the threat model).
 - **Packaging (audit follow-up)**: `npm run build` now runs a path-validated
-  `clean` step first, so a stale `dist/testing` directory from an earlier build
-  layout can no longer survive into a manual publish. The package smoke test now
-  inspects the actual packed tarball (`tar -tzf`) instead of a second
-  `npm pack --dry-run`.
+  `clean` step first, and the package smoke test builds explicitly then packs
+  with `npm pack --ignore-scripts` — `npm pack` can select its file list before
+  `prepack` runs, so relying on prepack's clean was not reliable across npm
+  versions. The smoke test plants a `dist/testing/stale.js` regression and
+  inspects the actual packed tarball (`tar -tzf`) to prove it is excluded.
+- **Release evidence integrity (audit follow-up)**: the differential release
+  gate now also fails on any label/oracle disagreement (a declared
+  `oracle_sensitive` contradicting the independent oracle), so the confusion
+  matrix can never certify release on unverified ground truth.
 - **Release workflow (audit follow-up, #6)**: `workflow_dispatch` runs are now
   dry-run only (gate + build, never publish); publication happens only on a
   `vX.Y.Z` tag push and fails unless the tag equals `v` + the `package.json`
-  version. Removed the silent OIDC→token fallback; trusted publishing only.
+  version. The workflow now also **creates the GitHub Release from the same
+  tag**, so npm + tag + Release align. Removed the silent OIDC→token fallback;
+  trusted publishing only.
 - **Security (recipient/destination authorization, #27/#28/#29)**: a sensitive
   egress call (`send_email`, `http_post`) that carried an authorized recipient
   *plus* an extra, unauthorized destination — a BCC/CC, a nested routing field,

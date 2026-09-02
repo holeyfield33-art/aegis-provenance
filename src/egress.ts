@@ -163,29 +163,76 @@ function originOf(url: string): string | null {
   }
 }
 
-/** Extract every email address and URL origin present in a set of raw strings,
- * checking each string in all of its decoded/folded surface forms. */
-function extractFromStrings(strings: string[]): Destinations {
-  const dest = emptyDestinations();
+/** Email addresses present in a set of raw strings, checked in every
+ * decoded/folded surface form. */
+function emailsFromStrings(strings: string[]): Set<string> {
+  const out = new Set<string>();
   for (const raw of strings) {
     for (const form of extractionForms(raw)) {
       for (const match of form.matchAll(EMAIL_PATTERN)) {
-        dest.emails.add(match[0].toLowerCase());
+        out.add(match[0].toLowerCase());
       }
+    }
+  }
+  return out;
+}
+
+/** URL origins present in a set of raw strings, checked in every
+ * decoded/folded surface form. */
+function hostsFromStrings(strings: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const raw of strings) {
+    for (const form of extractionForms(raw)) {
       for (const match of form.matchAll(URL_PATTERN)) {
         const origin = originOf(match[0]);
         if (origin) {
-          dest.hosts.add(origin);
+          out.add(origin);
         }
       }
     }
   }
-  return dest;
+  return out;
 }
 
-/** Every destination a downstream tool would consume from a call's arguments. */
-export function extractCallDestinations(args: unknown): Destinations {
-  return extractFromStrings(collectLeafStrings(args));
+/** Extract every email address and URL origin present in a set of raw strings. */
+function extractFromStrings(strings: string[]): Destinations {
+  return { emails: emailsFromStrings(strings), hosts: hostsFromStrings(strings) };
+}
+
+/**
+ * The destinations a tool would actually transmit to, per an explicit,
+ * documented per-tool contract kept in lock-step with the differential tool
+ * oracle so the two independent implementations agree on ground truth:
+ *
+ *   - send_email transmits to email RECIPIENTS. Any email address in the
+ *     arguments, at any depth, counts — a lenient mailer treats bcc/cc/nested/
+ *     serialized addresses all as recipients, which is exactly the smuggling
+ *     surface. A URL in the arguments is payload (a link in the body), NOT a
+ *     destination: this tool sends mail, it does not fetch URLs.
+ *   - http_post transmits to the URL HOST(s) it posts to. An email address in
+ *     its arguments is payload (part of the request body), NOT a destination.
+ *   - any other tool carries no email/host egress destination here; the generic
+ *     provenance/user-session gates decide it.
+ *
+ * Extracting a value the tool does not act on (a URL a mailer ignores, an email
+ * an HTTP client ignores) would be a false positive, not defense-in-depth — so
+ * the contract is matched exactly. A deployment whose tool DOES consume a
+ * further field (e.g. a mailer that fires a delivery webhook) must widen this
+ * contract, and the oracle, together.
+ */
+export function extractCallDestinations(actionName: string, args: unknown): Destinations {
+  const lower = actionName.toLowerCase();
+  const leaves = collectLeafStrings(args);
+
+  if (/^send_/.test(lower) || lower === 'sendemail') {
+    return { emails: emailsFromStrings(leaves), hosts: new Set<string>() };
+  }
+
+  if (lower === 'http_post' || lower === 'httppost') {
+    return { emails: new Set<string>(), hosts: hostsFromStrings(leaves) };
+  }
+
+  return emptyDestinations();
 }
 
 /** Destinations the user explicitly named in their own (actionable) session
@@ -314,8 +361,8 @@ function typedDestinations(dest: Destinations): TypedDestination[] {
  * destination (blocked), or out of untrusted content (unclean inert / trips the
  * trace check).
  */
-export function egressAuthorizationCheck(args: unknown, spans: Span[]): EgressAuthorizationResult {
-  const call = extractCallDestinations(args);
+export function egressAuthorizationCheck(actionName: string, args: unknown, spans: Span[]): EgressAuthorizationResult {
+  const call = extractCallDestinations(actionName, args);
   const user = extractUserDestinations(spans);
 
   const dests = typedDestinations(call);

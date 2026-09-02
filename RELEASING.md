@@ -13,7 +13,7 @@ Run locally, or let CI + `prepublishOnly` run them:
 | Type check | `npm run typecheck` | clean |
 | Unit tests | `npm test` | all pass |
 | Original benchmark | `npm run benchmark` | accuracy ≥ 95% (currently 99/99), 0 crashes |
-| **Differential security gate** | `npm run benchmark:differential:gate` | **0 false negatives, 0 crashes, effect-FP rate ≤ 10%** |
+| **Differential security gate** | `npm run benchmark:differential:gate` | **0 false negatives, 0 crashes, effect-FP rate ≤ 10%, 0 label/oracle disagreements** |
 | Clean-pack smoke test | `npm run smoke:package` | passes; `dist/testing` not shipped |
 | Production audit | `npm audit --omit=dev` | 0 high/critical |
 
@@ -38,6 +38,11 @@ fail-closed on security:
   but excluded from the gate, because they are attack payloads that happen to
   lack a target, not realistic benign requests. The raw FP rate (including those
   no-ops) is printed alongside.
+- **Zero label/oracle disagreements.** No fixture's declared `oracle_sensitive`
+  label may contradict the independent tool oracle's inspection of the same
+  call. A disagreement means the ground truth is unverified (a hand-wrong label,
+  or an oracle that does not model the tool's real contract), so the matrix
+  cannot be trusted and release is blocked until it is resolved.
 
 ## Provenance: one commit, three places (finding #6)
 
@@ -48,13 +53,15 @@ from the release tag. Do not repeat this.
 
 The supported way to guarantee it is the `release` workflow
 (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag builds and publishes
-from exactly that commit and attaches **npm build provenance**
-(`npm publish --provenance`). The workflow **fails** if the git tag does not
-equal `v` + the `package.json` version, so npm, tag and release cannot drift.
-Running the workflow manually (`workflow_dispatch`) is a **dry run only** — it
-runs the full gate and builds/packs but never publishes, so a manual run cannot
-push an arbitrary branch to npm. A manual `npm publish` from a laptop does **not**
-get trusted-publisher provenance — prefer the workflow.
+from exactly that commit, attaches **npm build provenance**
+(`npm publish --provenance`), **and creates the GitHub Release from the same
+tag** — so all three (npm, git tag, GitHub Release) identify the same commit.
+The workflow **fails** if the git tag does not equal `v` + the `package.json`
+version, so they cannot drift. Running the workflow manually
+(`workflow_dispatch`) is a **dry run only** — it runs the full gate and
+builds/packs but never publishes, so a manual run cannot push an arbitrary
+branch to npm. A manual `npm publish` from a laptop does **not** get
+trusted-publisher provenance — prefer the workflow.
 
 If you must publish manually:
 
