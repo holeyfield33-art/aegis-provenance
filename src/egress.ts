@@ -27,6 +27,7 @@
 
 import type { Span } from './types.js';
 import { foldConfusables, stripInvisible, expandDecodedCandidates } from './normalize.js';
+import { egressContract } from './tool-contracts.js';
 
 const MAX_DEPTH = 8;
 
@@ -204,35 +205,40 @@ function extractFromStrings(strings: string[]): Destinations {
  * documented per-tool contract kept in lock-step with the differential tool
  * oracle so the two independent implementations agree on ground truth:
  *
- *   - send_email transmits to email RECIPIENTS. Any email address in the
- *     arguments, at any depth, counts — a lenient mailer treats bcc/cc/nested/
- *     serialized addresses all as recipients, which is exactly the smuggling
- *     surface. A URL in the arguments is payload (a link in the body), NOT a
- *     destination: this tool sends mail, it does not fetch URLs.
- *   - http_post transmits to the URL HOST(s) it posts to. An email address in
- *     its arguments is payload (part of the request body), NOT a destination.
+ *   - send_email (and its aliases) transmits to email RECIPIENTS. Any email
+ *     address in the arguments, at any depth, counts — this is a deliberately
+ *     CONSERVATIVE, lenient-mailer model: bcc/cc/nested/serialized addresses are
+ *     all treated as recipients (which is exactly the smuggling surface), even a
+ *     bare address in a body field. It is not a precise recipient-key schema; it
+ *     errs toward extracting an address rather than missing a smuggled one. A
+ *     URL in the arguments is payload (a link in the body), NOT a destination:
+ *     this tool sends mail, it does not fetch URLs.
+ *   - http_post (and its aliases) transmits to the URL HOST(s) it posts to. An
+ *     email address in its arguments is body payload, NOT a destination.
  *   - any other tool carries no email/host egress destination here; the generic
- *     provenance/user-session gates decide it.
+ *     provenance/user-session gates decide it. An unknown tool is never
+ *     positively authorized on egress grounds.
  *
- * Extracting a value the tool does not act on (a URL a mailer ignores, an email
- * an HTTP client ignores) would be a false positive, not defense-in-depth — so
- * the contract is matched exactly. A deployment whose tool DOES consume a
- * further field (e.g. a mailer that fires a delivery webhook) must widen this
- * contract, and the oracle, together.
+ * The tool is resolved through the shared egress-contract resolver
+ * (src/tool-contracts.ts), which maps every documented alias to a canonical
+ * tool — so `send_http`/`http_request` are network tools whose HOSTS are
+ * extracted, not email tools (a `/^send_/` guess would misclassify them and
+ * mask an unauthorized host). Extracting a value the tool does not act on would
+ * be a false positive; a deployment whose tool consumes a further destination
+ * field (e.g. a mailer that fires a delivery webhook) must widen the contract,
+ * and the oracle, together.
  */
 export function extractCallDestinations(actionName: string, args: unknown): Destinations {
-  const lower = actionName.toLowerCase();
   const leaves = collectLeafStrings(args);
 
-  if (/^send_/.test(lower) || lower === 'sendemail') {
-    return { emails: emailsFromStrings(leaves), hosts: new Set<string>() };
+  switch (egressContract(actionName)) {
+    case 'email':
+      return { emails: emailsFromStrings(leaves), hosts: new Set<string>() };
+    case 'network':
+      return { emails: new Set<string>(), hosts: hostsFromStrings(leaves) };
+    default:
+      return emptyDestinations();
   }
-
-  if (lower === 'http_post' || lower === 'httppost') {
-    return { emails: new Set<string>(), hosts: hostsFromStrings(leaves) };
-  }
-
-  return emptyDestinations();
 }
 
 /** Destinations the user explicitly named in their own (actionable) session

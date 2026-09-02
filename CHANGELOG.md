@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security (tool-name/contract confusion masking, audit follow-up)**: egress
+  destination extraction inferred the email contract from a `/^send_/` name
+  prefix, so `send_http` (which a lenient dispatcher and the tool oracle resolve
+  to `http_post`) was treated as an email tool and its URL host never extracted —
+  an authorized host masked an unauthorized one. Tool classification now goes
+  through an explicit alias resolver (`src/tool-contracts.ts`) that mirrors the
+  oracle: network aliases (`send_http`, `http_request`, `post`, `upload`,
+  `webhook`, …) extract URL hosts, email aliases (`mail`, `sendmail`, …) extract
+  recipients, and an unknown tool receives no positive egress authorization. The
+  same resolver makes the sensitivity classifier and the harness alias-aware, so
+  a documented alias reaches and is enforced as the tool it denotes instead of
+  being blind-rejected. Added an `attacks/alias-contract/` fixture category and
+  resolver unit tests covering every network/email alias and unknown `send_*`.
 - **Security (egress destinations follow a per-tool contract, audit
   follow-up)**: egress destination extraction is now tool-aware and matches the
   tool's actual contract, kept in lock-step with the differential tool oracle.
@@ -42,8 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dry-run only (gate + build, never publish); publication happens only on a
   `vX.Y.Z` tag push and fails unless the tag equals `v` + the `package.json`
   version. The workflow now also **creates the GitHub Release from the same
-  tag**, so npm + tag + Release align. Removed the silent OIDC→token fallback;
-  trusted publishing only.
+  tag**, so npm + tag + Release align, and the publish step is **idempotent** —
+  a re-run after a partial failure skips the already-published version and
+  repairs the missing Release. Removed the silent OIDC→token fallback; trusted
+  publishing only.
 - **Security (recipient/destination authorization, #27/#28/#29)**: a sensitive
   egress call (`send_email`, `http_post`) that carried an authorized recipient
   *plus* an extra, unauthorized destination — a BCC/CC, a nested routing field,

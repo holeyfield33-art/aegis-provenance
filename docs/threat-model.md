@@ -102,13 +102,21 @@ If you build on Aegis, you can rely on the following:
    For a sensitive egress call Aegis extracts the destinations the tool actually
    transmits to, per an explicit per-tool contract, and requires each to be
    authorized by the user session:
-   - `send_email` transmits to email **recipients** — any address in the
-     arguments at any depth (nested objects/arrays, JSON-in-string incl.
-     double-escaped, header-injected lines, comma/newline lists, and behind
-     homoglyph/percent/base64/hex/rot13 obfuscation), because a lenient mailer
-     treats them all as recipients. A **URL** in a `send_email` argument is
-     payload (a link in the body), **not** a destination — this tool sends mail,
-     it does not fetch URLs.
+   - `send_email` transmits to email **recipients**. This is a deliberately
+     **conservative, lenient-mailer** model, not a precise recipient-key schema:
+     any address in the arguments at any depth (nested objects/arrays,
+     JSON-in-string incl. double-escaped, header-injected lines, comma/newline
+     lists, and behind homoglyph/percent/base64/hex/rot13 obfuscation) is treated
+     as a recipient — even a bare address in a body-shaped field. It errs toward
+     extracting an address rather than missing a smuggled one, so an address in
+     free text can be a false positive; that is the intended trade-off. A **URL**
+     in a `send_email` argument is payload (a link in the body), **not** a
+     destination — this tool sends mail, it does not fetch URLs.
+   - Tool names are resolved through a documented alias map (a lenient dispatcher
+     routes `send_http`/`http_request`/`post` to the network tool and
+     `mail`/`SendEmail` to the mailer), so a call is classified by the tool it
+     actually reaches — never by a name-prefix guess. An unknown tool receives no
+     positive egress authorization.
    - `http_post` transmits to the URL **host(s)** it posts to. An **email** in an
      `http_post` argument is body payload, **not** a destination.
 

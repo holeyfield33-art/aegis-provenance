@@ -63,9 +63,24 @@ jobs:
       # Publish ONLY on a tag push, and only via trusted publishing (OIDC). A
       # workflow_dispatch run reaches here with ref_type != 'tag' and skips
       # publication entirely — it is a dry run.
+      #
+      # Idempotent so the sequence is recoverable: if a previous run published to
+      # npm but failed before creating the GitHub Release, re-running the
+      # workflow on the same tag detects that this exact version is already on
+      # npm, skips the (irreversible, and would-error) republish, and proceeds to
+      # the Release step below — repairing the missing Release. Any other npm
+      # failure still fails the job.
       - name: Publish to npm with provenance
         if: github.ref_type == 'tag'
-        run: npm publish --provenance --access public
+        run: |
+          set -euo pipefail
+          PKG_NAME="$(node -p "require('./package.json').name")"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "${PKG_NAME}@${PKG_VERSION} is already published to npm; skipping publish (will still ensure the GitHub Release exists)."
+          else
+            npm publish --provenance --access public
+          fi
 
       # Create the GitHub Release from the SAME tag, so npm, the git tag and the
       # GitHub Release all identify the same commit (finding #6). --verify-tag
