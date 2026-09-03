@@ -190,11 +190,18 @@ export function candidateRepresentations(text: string): string[] {
  * literal check would have missed. */
 export function candidateContentRepresentations(text: string): string[] {
   const forms = new Set<string>();
-  forms.add(text);
-  forms.add(foldConfusables(stripInvisible(text)));
-  for (const decoded of expandDecodedCandidates(text)) {
-    forms.add(decoded);
-    forms.add(foldConfusables(stripInvisible(decoded)));
+  // Decode from BOTH the raw text and its invisible-stripped / homoglyph-folded
+  // form. An invisible char or homoglyph inserted *inside* a base64/hex token
+  // breaks token recognition on the raw text, so decoding it requires first
+  // reconstructing the clean token via the fold — decoding only the raw text
+  // would let one extra obfuscation layer re-open the encoded bypass.
+  const folded = foldConfusables(stripInvisible(text));
+  for (const base of [text, folded]) {
+    forms.add(base);
+    for (const decoded of expandDecodedCandidates(base)) {
+      forms.add(decoded);
+      forms.add(foldConfusables(stripInvisible(decoded)));
+    }
   }
   return Array.from(forms);
 }
