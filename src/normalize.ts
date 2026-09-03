@@ -177,7 +177,7 @@ export function candidateRepresentations(text: string): string[] {
 }
 
 /**
- * Case- and layout-preserving representations of `text` for content-pattern
+ * Case-preserving representations of `text` for content-pattern
  * matching, as opposed to `candidateRepresentations`, which lowercases and
  * collapses whitespace for substring provenance matching. Some
  * content-sensitivity patterns are case-sensitive by design (all-caps
