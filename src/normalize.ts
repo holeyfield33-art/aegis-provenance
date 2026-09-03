@@ -175,3 +175,26 @@ export function candidateRepresentations(text: string): string[] {
   }
   return Array.from(forms);
 }
+
+/**
+ * Case- and layout-preserving representations of `text` for content-pattern
+ * matching, as opposed to `candidateRepresentations`, which lowercases and
+ * collapses whitespace for substring provenance matching. Some
+ * content-sensitivity patterns are case-sensitive by design (all-caps
+ * environment-variable-shaped secret names like AEGIS_EVAL_API_KEY, AWS AKIA
+ * access-key ids), so this expansion must NOT fold case: it strips invisible
+ * characters and folds homoglyphs (both case-preserving), then adds
+ * base64/hex/rot13 decodings. Every original character's case is retained so
+ * the case-sensitive patterns still fire. This is a strict superset of the
+ * raw text (which is always included), so it only ever adds matches the
+ * literal check would have missed. */
+export function candidateContentRepresentations(text: string): string[] {
+  const forms = new Set<string>();
+  forms.add(text);
+  forms.add(foldConfusables(stripInvisible(text)));
+  for (const decoded of expandDecodedCandidates(text)) {
+    forms.add(decoded);
+    forms.add(foldConfusables(stripInvisible(decoded)));
+  }
+  return Array.from(forms);
+}

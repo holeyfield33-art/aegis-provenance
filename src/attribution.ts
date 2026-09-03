@@ -1,6 +1,6 @@
 import type { Span } from './types.js';
 import { AegisAttributionError } from './types.js';
-import { candidateRepresentations, normalizeMatchText } from './normalize.js';
+import { candidateRepresentations, candidateContentRepresentations, normalizeMatchText } from './normalize.js';
 import { egressAuthorizationCheck } from './egress.js';
 import { resolveCanonicalTool } from './tool-contracts.js';
 
@@ -293,28 +293,40 @@ export interface ContentSensitivityResult {
  * content-based counterpart to the name-based table — it is what lets
  * `sensitiveActionPolicy` catch a `search` or `read_file` call that carries
  * exfiltration-shaped arguments.
+ *
+ * Each argument value is matched not only literally but across its
+ * case-preserving decoded/folded representations (base64/hex/rot13,
+ * homoglyph-folded, invisible-stripped). Without this, wrapping any of these
+ * triggers in base64 or hex — the same evasion the provenance side already
+ * handles — left this content layer completely blind: an encoded secret name
+ * or credential path was a clean `allow`. `candidateContentRepresentations`
+ * preserves case so the case-sensitive patterns (all-caps secret names, AWS
+ * AKIA ids) still fire, and includes the raw text, so this only ever adds
+ * matches the literal-only check would have missed.
  */
 export function contentSensitivityCheck(args: unknown): ContentSensitivityResult {
   const reasons = new Set<string>();
 
-  for (const raw of extractStrings(args)) {
-    if (SECRET_KEY_NAME_PATTERN.test(raw)) {
-      reasons.add('argument references an environment-variable-shaped secret name');
-    }
-    if (SECRET_VALUE_PATTERN.test(raw)) {
-      reasons.add('argument contains a credential-shaped token');
-    }
-    if (CREDENTIAL_FILE_PATTERN.test(raw)) {
-      reasons.add('argument references a credential file path');
-    }
-    if (SECRET_REQUEST_PATTERN.test(raw)) {
-      reasons.add('argument requests secret or credential material');
-    }
-    if (PATH_TRAVERSAL_PATTERN.test(raw)) {
-      reasons.add('argument contains a path traversal sequence');
-    }
-    if (IDENTITY_OVERRIDE_PATTERN.test(raw)) {
-      reasons.add('argument attempts to redefine acting identity or override system framing');
+  for (const value of extractStrings(args)) {
+    for (const rep of candidateContentRepresentations(value)) {
+      if (SECRET_KEY_NAME_PATTERN.test(rep)) {
+        reasons.add('argument references an environment-variable-shaped secret name');
+      }
+      if (SECRET_VALUE_PATTERN.test(rep)) {
+        reasons.add('argument contains a credential-shaped token');
+      }
+      if (CREDENTIAL_FILE_PATTERN.test(rep)) {
+        reasons.add('argument references a credential file path');
+      }
+      if (SECRET_REQUEST_PATTERN.test(rep)) {
+        reasons.add('argument requests secret or credential material');
+      }
+      if (PATH_TRAVERSAL_PATTERN.test(rep)) {
+        reasons.add('argument contains a path traversal sequence');
+      }
+      if (IDENTITY_OVERRIDE_PATTERN.test(rep)) {
+        reasons.add('argument attempts to redefine acting identity or override system framing');
+      }
     }
   }
 
