@@ -181,12 +181,13 @@ Aegis uses deterministic signals to decide whether a tool call is safe:
   transmits to URL hosts (an email in its args is payload). Aegis extracts those
   destinations structurally — through nested objects/arrays, JSON embedded in
   string fields (including double-escaped), header-injected lines,
-  comma-separated lists, and behind homoglyph/percent/base64/hex/rot13
-  obfuscation — so an authorized recipient can no longer mask a smuggled BCC,
-  nested address, or serialized extra recipient. URL hosts are matched at origin
-  (scheme+host+port). A single recipient the user asked for by role ("email my
-  manager") is still allowed when the untrusted context is clean; anything the
-  user did not authorize is blocked.
+  comma-separated lists, and after homoglyph-folding and percent-decoding — so an
+  authorized recipient can no longer mask a smuggled BCC, nested address, or
+  serialized extra recipient. (base64/hex/rot13 decoding is applied when tracing
+  a destination back to an untrusted span, not when extracting destinations from
+  the call.) URL hosts are matched at origin (scheme+host+port). A single
+  recipient the user asked for by role ("email my manager") is still allowed when
+  the untrusted context is clean; anything the user did not authorize is blocked.
 
 ### Receipts
 

@@ -106,12 +106,20 @@ If you build on Aegis, you can rely on the following:
      **conservative, lenient-mailer** model, not a precise recipient-key schema:
      any address in the arguments at any depth (nested objects/arrays,
      JSON-in-string incl. double-escaped, header-injected lines, comma/newline
-     lists, and behind homoglyph/percent/base64/hex/rot13 obfuscation) is treated
-     as a recipient — even a bare address in a body-shaped field. It errs toward
+     lists, and after homoglyph-folding and percent-decoding) is treated as a
+     recipient — even a bare address in a body-shaped field. It errs toward
      extracting an address rather than missing a smuggled one, so an address in
      free text can be a false positive; that is the intended trade-off. A **URL**
      in a `send_email` argument is payload (a link in the body), **not** a
      destination — this tool sends mail, it does not fetch URLs.
+
+     Destination EXTRACTION from the call applies only lossless normalizations
+     (invisible-character stripping, homoglyph folding, percent-decoding) — it
+     does **not** base64/hex/rot13-decode argument values, since a real tool
+     would not transmit to a base64 blob either. base64/hex/rot13 decoding is
+     applied on the SPAN side, when checking whether a plaintext destination in
+     the call traces back to obfuscated content in an untrusted span (the
+     provenance link); it is not part of pulling destinations out of the call.
    - Tool names are resolved through a documented alias map (a lenient dispatcher
      routes `send_http`/`http_request`/`post` to the network tool and
      `mail`/`SendEmail` to the mailer), so a call is classified by the tool it

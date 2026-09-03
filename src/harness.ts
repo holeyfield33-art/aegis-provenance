@@ -5,7 +5,7 @@ import { decideAttribution } from './attribution.js';
 import { createReceipt, GENESIS_HASH } from './receipt.js';
 import { ReceiptStore } from './receipt-store.js';
 import { getSigningKey, derivePublicKey } from './crypto/keys.js';
-import { resolveCanonicalTool, normalizeToolKey } from './tool-contracts.js';
+import { normalizeToolKey } from './tool-contracts.js';
 import { AegisBlockedError, AegisReceiptError, AegisAttributionError, AegisVerificationError } from './types.js';
 
 export interface ModelClientResponse {
@@ -67,17 +67,14 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
   const modelResponse = await options.modelClient.call(assembled.messages);
 
   // Resolve the model's tool name to a registered tool. A real dispatcher is
-  // lenient: it routes a case/spacing/punctuation variant (`SendEmail`,
-  // `send-email`) AND a documented alias (`mail`, `send_http`) to the same
-  // underlying tool. Aegis mirrors that so a call reaches — and is enforced as —
-  // the tool it truly denotes, instead of being blindly rejected (an
-  // availability cost) or, worse, mis-analyzed under the wrong contract. Two
-  // layers, both fail-closed on a genuinely unknown name:
-  //   1. exact match on a case/punctuation-insensitive key against a REGISTERED
-  //      tool name (covers custom tools and spelling variants);
-  //   2. otherwise, the shared alias resolver maps the name to a canonical tool
-  //      (src/tool-contracts.ts) — accepted only if that canonical is actually
-  //      registered for this call. A name matching neither is refused.
+  // lenient only to a case/spacing/punctuation variant of an EXPLICITLY
+  // REGISTERED tool name (`SendEmail`/`send-email` -> a registered `send_email`).
+  // It does NOT expand semantic aliases (`mail`, `send_http`, `post`): those
+  // still fail closed as unregistered, so registering one tool never implicitly
+  // authorizes model output under a different name. A caller that wants a tool
+  // reachable under extra names registers those names explicitly. (Contract
+  // CLASSIFICATION downstream is still alias-aware, so if a deployment does
+  // register `send_http`, it is correctly enforced as a network egress tool.)
   const registeredByKey = new Map<string, string>();
   for (const tool of options.tools) {
     registeredByKey.set(normalizeToolKey(tool.name), tool.name);
@@ -88,14 +85,7 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
     if (!modelResponse.tool_name) {
       throw new AegisAttributionError('Model returned a tool_call response without a tool_name.');
     }
-    const key = normalizeToolKey(modelResponse.tool_name);
-    let canonical = registeredByKey.get(key);
-    if (!canonical) {
-      const aliasCanonical = resolveCanonicalTool(modelResponse.tool_name);
-      if (aliasCanonical) {
-        canonical = registeredByKey.get(normalizeToolKey(aliasCanonical));
-      }
-    }
+    const canonical = registeredByKey.get(normalizeToolKey(modelResponse.tool_name));
     if (!canonical) {
       throw new AegisAttributionError(`Model returned an unregistered tool_name: ${modelResponse.tool_name}`);
     }
@@ -146,5 +136,14 @@ export async function runAegis(options: HarnessOptions): Promise<HarnessResult> 
     throw new AegisBlockedError(attribution.reason, receipt.receipt_hash);
   }
 
-  return { response: modelResponse, receipt };
+  // Return the CANONICAL tool name that was actually enforced and signed into
+  // the receipt, not the raw name the model emitted. Otherwise a caller could
+  // execute a call whose name differs from what the immutable receipt attests
+  // (e.g. `SendEmail` returned while `send_email` was enforced/receipted). For a
+  // tool call, response.tool_name is guaranteed to equal
+  // receipt.model_action.tool_name.
+  const response: ModelClientResponse =
+    modelResponse.type === 'tool_call' ? { ...modelResponse, tool_name: resolvedToolName } : modelResponse;
+
+  return { response, receipt };
 }

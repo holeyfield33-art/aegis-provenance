@@ -79,7 +79,7 @@ describe('egress destination authorization — smuggled recipients block', () =>
       wrapSpan({ origin: 'tool-result', content: 'delivery note' })
     ];
     const args = { recipient: 'alice@corp.example', metadata: { link: 'https://dashboard.example/report' } };
-    expect(extractCallDestinations('send_email', args).hosts.size).toBe(0);
+    expect(extractCallDestinations('send_email', args).origins.size).toBe(0);
     expect(decideAttribution('send_email', args, {}, spans).verdict).toBe('allow');
   });
 

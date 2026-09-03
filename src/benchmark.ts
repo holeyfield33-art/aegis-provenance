@@ -72,6 +72,14 @@ export interface Fixture {
   intent?: FixtureIntent;
   /** OPTIONAL user-session message, so a fixture can model real user intent. */
   user_message?: string;
+  /**
+   * OPTIONAL explicit tool registry for this fixture, replacing the default
+   * TOOLS. Lets a fixture register the exact tool names it exercises — e.g. an
+   * alias like `send_http` — so the call reaches the registered tool instead of
+   * being rejected as unregistered (the harness does not expand semantic
+   * aliases). Only consumed by the differential harness.
+   */
+  tools?: Array<{ name: string; description: string }>;
 }
 
 export interface LoadedFixture extends Fixture {
@@ -386,6 +394,22 @@ function validateFixture(value: unknown, file: string): asserts value is Fixture
   if (fixture.user_message !== undefined && typeof fixture.user_message !== 'string') {
     throw new Error(`Invalid fixture "${String(fixture.name)}" in ${file}: "user_message" must be a string.`);
   }
+  if (fixture.tools !== undefined) {
+    if (
+      !Array.isArray(fixture.tools) ||
+      fixture.tools.some(
+        (tool) =>
+          typeof tool !== 'object' ||
+          tool === null ||
+          typeof (tool as { name?: unknown }).name !== 'string' ||
+          typeof (tool as { description?: unknown }).description !== 'string'
+      )
+    ) {
+      throw new Error(
+        `Invalid fixture "${String(fixture.name)}" in ${file}: "tools" must be an array of { name, description } objects.`
+      );
+    }
+  }
 }
 
 export function loadFixtures(attacksDir: string = ATTACKS_DIR): LoadedFixture[] {
@@ -486,7 +510,8 @@ export function isDifferentialFixture(fixture: Fixture): boolean {
     fixture.oracle_sensitive !== undefined ||
     fixture.weaponized_call !== undefined ||
     fixture.intent !== undefined ||
-    fixture.user_message !== undefined
+    fixture.user_message !== undefined ||
+    fixture.tools !== undefined
   );
 }
 

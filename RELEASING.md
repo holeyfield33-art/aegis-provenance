@@ -57,11 +57,16 @@ from exactly that commit, attaches **npm build provenance**
 (`npm publish --provenance`), **and creates the GitHub Release from the same
 tag** — so all three (npm, git tag, GitHub Release) identify the same commit.
 The workflow **fails** if the git tag does not equal `v` + the `package.json`
-version, so they cannot drift. The publish step is **idempotent**: if a run
-publishes to npm but fails before creating the GitHub Release, re-run the
-workflow on the same tag — it sees this exact version is already on npm, skips
-the republish, and creates the missing Release (the repair path). Running the
-workflow manually (`workflow_dispatch`) is a **dry run only** — it runs the full gate and
+version, so they cannot drift. Publication is gated on a real **tag push**
+(`github.event_name == 'push'` AND a tag ref) — a manual `workflow_dispatch`,
+even one that selects a tag, can never publish. The publish step is
+**idempotent and identity-checked**: if a run publishes to npm but fails before
+creating the GitHub Release, re-run the workflow on the same tag — it skips the
+republish **only if** npm's recorded `gitHead` for that version matches the
+tagged commit, then creates the missing Release (the repair path). A version
+that already exists but was published from a different or unknown commit fails
+the job rather than getting a misleading Release. Running the workflow manually
+(`workflow_dispatch`) is a **dry run only** — it runs the full gate and
 builds/packs but never publishes, so a manual run cannot push an arbitrary
 branch to npm. A manual `npm publish` from a laptop does **not** get
 trusted-publisher provenance — prefer the workflow.

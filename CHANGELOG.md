@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security (receipt/response tool-name integrity, audit follow-up)**: the
+  harness signed the resolved canonical tool name into the receipt but returned
+  the raw model-emitted name, so a caller could execute a call whose name
+  differed from what the immutable receipt attests. `runAegis` now returns the
+  canonical tool name; a regression asserts `response.tool_name ===
+  receipt.model_action.tool_name` for allowed tool calls.
+- **Security posture (default tool authorization narrowed, audit follow-up)**:
+  the harness no longer expands semantic aliases (`mail`, `send_http`, `post`)
+  to registered tools — registering one tool never implicitly authorizes model
+  output under a different name; only case/punctuation variants of an explicitly
+  registered name resolve. Contract CLASSIFICATION remains alias-aware, so a tool
+  a deployment *does* register under such a name is still enforced correctly. A
+  fixture that exercises an alias registers that name explicitly (new per-fixture
+  `tools` field).
+- **Release integrity (audit follow-up)**: publication is gated on a real tag
+  **push** (`github.event_name == 'push'`), so a manual `workflow_dispatch`
+  targeting a tag can no longer publish; and recovery no longer trusts version
+  occupancy — it verifies npm's recorded `gitHead` matches the tagged commit
+  before skipping a republish or creating a Release.
+- **Docs/robustness (audit follow-up)**: corrected the threat model and README
+  to state that destination EXTRACTION applies only lossless forms (invisible
+  strip, homoglyph fold, percent-decode) — base64/hex/rot13 decoding is used on
+  the span side for provenance tracing, not to pull destinations from a call.
+  The package smoke test surfaces an actionable error if `tar` is unavailable,
+  and `Destinations.hosts` was renamed `origins` to reflect that it holds URL
+  origins, not bare hostnames.
+
 - **Security (tool-name/contract confusion masking, audit follow-up)**: egress
   destination extraction inferred the email contract from a `/^send_/` name
   prefix, so `send_http` (which a lenient dispatcher and the tool oracle resolve

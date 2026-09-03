@@ -14,10 +14,13 @@
 // This module closes that gap structurally (issues #27/#28/#29). It extracts
 // EVERY destination a downstream tool would actually consume — traversing
 // nested objects/arrays, parsing JSON embedded in string fields (including
-// double-escaped), splitting comma/newline-separated lists, and folding
-// homoglyphs / decoding base64/hex/rot13/percent-encoding — and requires each
-// one to be positively justified by the user's own session. Anything the user
-// did not authorize is treated as an off-intent send and blocked.
+// double-escaped), splitting comma/newline-separated lists, folding homoglyphs
+// and percent-decoding — and requires each one to be positively justified by
+// the user's own session. Anything the user did not authorize is treated as an
+// off-intent send and blocked. (Extraction applies only these lossless forms;
+// base64/hex/rot13 decoding is used on the SPAN side to trace a call
+// destination back to obfuscated untrusted content, not to pull destinations
+// out of the call — see `extractionForms` vs `spanMatchForms`.)
 //
 // It is deliberately an INDEPENDENT implementation from the differential tool
 // oracle (src/testing/tool-oracle.ts). The oracle must never import Aegis, and
@@ -37,13 +40,14 @@ const URL_PATTERN = /https?:\/\/[^\s"'<>)\]}]+/gi;
 
 export interface Destinations {
   emails: Set<string>;
-  /** URL origins (scheme://host[:port], default ports normalized away), NOT
-   * bare hostnames — network destinations are authorized at origin granularity. */
-  hosts: Set<string>;
+  /** URL origins (`scheme://host[:port]`, default ports normalized away), NOT
+   * bare hostnames — network destinations are authorized at origin granularity.
+   * Named `origins` (not `hosts`) so callers do not treat these as hostnames. */
+  origins: Set<string>;
 }
 
 function emptyDestinations(): Destinations {
-  return { emails: new Set<string>(), hosts: new Set<string>() };
+  return { emails: new Set<string>(), origins: new Set<string>() };
 }
 
 /** Percent-decode a string, but only when it actually changes and stays valid;
@@ -180,7 +184,7 @@ function emailsFromStrings(strings: string[]): Set<string> {
 
 /** URL origins present in a set of raw strings, checked in every
  * decoded/folded surface form. */
-function hostsFromStrings(strings: string[]): Set<string> {
+function originsFromStrings(strings: string[]): Set<string> {
   const out = new Set<string>();
   for (const raw of strings) {
     for (const form of extractionForms(raw)) {
@@ -197,7 +201,7 @@ function hostsFromStrings(strings: string[]): Set<string> {
 
 /** Extract every email address and URL origin present in a set of raw strings. */
 function extractFromStrings(strings: string[]): Destinations {
-  return { emails: emailsFromStrings(strings), hosts: hostsFromStrings(strings) };
+  return { emails: emailsFromStrings(strings), origins: originsFromStrings(strings) };
 }
 
 /**
@@ -233,9 +237,9 @@ export function extractCallDestinations(actionName: string, args: unknown): Dest
 
   switch (egressContract(actionName)) {
     case 'email':
-      return { emails: emailsFromStrings(leaves), hosts: new Set<string>() };
+      return { emails: emailsFromStrings(leaves), origins: new Set<string>() };
     case 'network':
-      return { emails: new Set<string>(), hosts: hostsFromStrings(leaves) };
+      return { emails: new Set<string>(), origins: originsFromStrings(leaves) };
     default:
       return emptyDestinations();
   }
@@ -331,7 +335,7 @@ interface TypedDestination {
 function typedDestinations(dest: Destinations): TypedDestination[] {
   return [
     ...[...dest.emails].map((value): TypedDestination => ({ kind: 'email', value })),
-    ...[...dest.hosts].map((value): TypedDestination => ({ kind: 'host', value }))
+    ...[...dest.origins].map((value): TypedDestination => ({ kind: 'host', value }))
   ];
 }
 
@@ -376,9 +380,9 @@ export function egressAuthorizationCheck(actionName: string, args: unknown, span
     return { decision: 'not-applicable', reason: '', unauthorized: [] };
   }
 
-  const userNamedAny = user.emails.size + user.hosts.size > 0;
+  const userNamedAny = user.emails.size + user.origins.size > 0;
   const isAuthorized = (d: TypedDestination): boolean =>
-    (d.kind === 'email' ? user.emails : user.hosts).has(d.value);
+    (d.kind === 'email' ? user.emails : user.origins).has(d.value);
   const unauthorized = dests.filter((d) => !isAuthorized(d));
 
   if (unauthorized.length === 0) {
