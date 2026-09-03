@@ -45,11 +45,16 @@ jobs:
       - run: npm run build
       - run: npm run smoke:package
 
+      # Publication is gated on a real TAG PUSH — `github.event_name == 'push'`
+      # AND `github.ref_type == 'tag'`. A manual `workflow_dispatch` can itself
+      # target a tag ref (making ref_type 'tag'), so the event_name guard is what
+      # keeps a manual run a dry run and prevents it from ever publishing.
+
       # On a tag push, the git tag and the package.json version MUST match, or we
       # would publish a version that does not correspond to the tagged commit
       # (finding #6). Fail hard on any mismatch.
       - name: Verify tag matches package version
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
           TAG="${GITHUB_REF_NAME}"
@@ -60,24 +65,28 @@ jobs:
             exit 1
           fi
 
-      # Publish ONLY on a tag push, and only via trusted publishing (OIDC). A
-      # workflow_dispatch run reaches here with ref_type != 'tag' and skips
-      # publication entirely — it is a dry run.
-      #
-      # Idempotent so the sequence is recoverable: if a previous run published to
-      # npm but failed before creating the GitHub Release, re-running the
-      # workflow on the same tag detects that this exact version is already on
-      # npm, skips the (irreversible, and would-error) republish, and proceeds to
-      # the Release step below — repairing the missing Release. Any other npm
-      # failure still fails the job.
+      # Publish only via trusted publishing (OIDC). Idempotent AND identity-checked
+      # so the sequence is recoverable WITHOUT trusting mere version occupancy: if
+      # this exact version is already on npm, we only skip the republish when npm's
+      # recorded gitHead matches THIS tagged commit ($GITHUB_SHA). A version that
+      # exists but was published from a different (or unknown) commit fails the
+      # job — we never proceed to create a GitHub Release for a package we cannot
+      # prove came from this commit.
       - name: Publish to npm with provenance
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         run: |
           set -euo pipefail
           PKG_NAME="$(node -p "require('./package.json').name")"
           PKG_VERSION="$(node -p "require('./package.json').version")"
           if npm view "${PKG_NAME}@${PKG_VERSION}" version >/dev/null 2>&1; then
-            echo "${PKG_NAME}@${PKG_VERSION} is already published to npm; skipping publish (will still ensure the GitHub Release exists)."
+            PUBLISHED_SHA="$(npm view "${PKG_NAME}@${PKG_VERSION}" gitHead 2>/dev/null || true)"
+            echo "already-published gitHead: ${PUBLISHED_SHA:-<none>}"
+            echo "this tagged commit:        ${GITHUB_SHA}"
+            if [ -z "$PUBLISHED_SHA" ] || [ "$PUBLISHED_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::${PKG_NAME}@${PKG_VERSION} is already on npm but its gitHead does not match this commit; refusing to proceed." >&2
+              exit 1
+            fi
+            echo "${PKG_NAME}@${PKG_VERSION} already published from this exact commit; skipping republish (will ensure the GitHub Release exists)."
           else
             npm publish --provenance --access public
           fi
@@ -87,7 +96,7 @@ jobs:
       # ensures the tag exists on this commit; the CHANGELOG section for this
       # version is used as the release notes when present.
       - name: Create GitHub Release from tag
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -110,5 +119,5 @@ jobs:
           fi
 
       - name: Dry run summary
-        if: github.ref_type != 'tag'
-        run: echo "Dry run complete (gate + build + smoke passed). Publication happens only on a vX.Y.Z tag push."
+        if: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
+        run: echo "Dry run complete (gate + build + smoke passed). Publication happens only on a vX.Y.Z tag PUSH (never a manual dispatch)."

@@ -61,8 +61,20 @@ try {
 
   // 2. Inspect the ACTUAL tarball contents (not a second `npm pack --dry-run`),
   //    so a stale file physically inside the archive is caught. npm prefixes
-  //    every entry with `package/`.
-  const listing = run('tar', ['-tzf', tarballPath], ROOT)
+  //    every entry with `package/`. `tar` is an external binary; if it is
+  //    missing or errors, surface an actionable message rather than a raw
+  //    low-signal spawn failure.
+  let tarOutput;
+  try {
+    tarOutput = run('tar', ['-tzf', tarballPath], ROOT);
+  } catch (error) {
+    throw new Error(
+      `Failed to list tarball contents with 'tar -tzf ${tarballName}'. Ensure a POSIX 'tar' is installed and on PATH. Underlying error: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+  const listing = tarOutput
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)

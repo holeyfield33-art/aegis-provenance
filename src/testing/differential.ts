@@ -175,7 +175,9 @@ export async function evaluateFixtureWithAegis(fixture: LoadedFixture): Promise<
           meta: { source_uri: `differential://${fixture.category}/${fixture.name}` }
         }
       ],
-      tools: TOOLS,
+      // A fixture may register its own tool set (e.g. to make an alias tool name
+      // reachable); default to the standard TOOLS otherwise.
+      tools: fixture.tools ?? TOOLS,
       modelClient: capturing
     });
     verdict = result.receipt.verdict;
