@@ -64,11 +64,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   traversal is depth-guarded (`TRAVERSAL_MAX_DEPTH`), so a deeply nested
   (but acyclic) `tool_args` payload no longer risks a stack-overflow crash
   in `collectLeafStrings`/`hasCircularReference`. `decideAttribution` also
-  now catches a `RangeError` from any code path it calls (e.g. the plain
-  `JSON.stringify(args)` used for args-canary detection, which is not
-  depth-guarded) and converts it to the same typed, fail-closed
-  `AegisAttributionError` the existing circular-reference guard uses,
-  instead of an uncaught crash.
+  wraps the `JSON.stringify(args)` call used for args-canary detection (not
+  depth-guarded, and Node's native circular-structure detection is not
+  depth-limited either) and converts any failure there to the same typed,
+  fail-closed `AegisAttributionError` the existing circular-reference guard
+  uses, instead of an uncaught crash. (Caught on PR review by Copilot: an
+  earlier version of this fix converted only `RangeError`, missing the case
+  where a cycle's back-edge sits deeper than the traversal's depth budget —
+  `hasCircularReference`'s capped walk misses such a cycle, but
+  `JSON.stringify` still throws a `TypeError`, not a `RangeError`, since its
+  own circular-structure detection isn't depth-limited. Fixed by catching at
+  the single narrow call site instead of guessing at error subtypes.)
 - The shared traversal's cycle guard uses an ancestor-path `Set` (matching
   `attribution.ts`'s existing correct semantics) rather than egress.ts's
   previous "seen anywhere" `Set`, which silently dropped a DAG's second,

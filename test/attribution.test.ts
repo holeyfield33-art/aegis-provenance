@@ -631,6 +631,29 @@ describe('circular tool_args guard', () => {
     }
     expect(() => decideAttribution('search', deep, {}, [])).toThrow(AegisAttributionError);
   });
+
+  // Regression for a Copilot review finding on PR #51: hasCircularReference's
+  // cycle check is depth-guarded (TRAVERSAL_MAX_DEPTH), which is safe for ITS
+  // purpose (a real cycle always closes within a handful of steps), but a
+  // pathological "long acyclic chain that only then closes into a cycle" —
+  // with the back-edge sitting deeper than the depth budget — slips past that
+  // guard undetected as non-circular. Node's native JSON.stringify(args),
+  // used for args-canary detection, is NOT depth-limited and still throws —
+  // but a TypeError ("Converting circular structure to JSON"), not a
+  // RangeError. An earlier version of this fix only converted RangeError to
+  // AegisAttributionError, letting this TypeError escape uncaught.
+  it('fails closed with a typed error on a cycle whose back-edge sits deeper than the traversal depth budget', () => {
+    const nodes: Record<string, unknown>[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      nodes.push({ i });
+    }
+    for (let i = 0; i < 19; i += 1) {
+      nodes[i]!.next = nodes[i + 1];
+    }
+    nodes[19]!.next = nodes[5]; // cycle closes at depth 20, past TRAVERSAL_MAX_DEPTH (8)
+
+    expect(() => decideAttribution('search', nodes[0], {}, [])).toThrow(AegisAttributionError);
+  });
 });
 
 // Regression coverage for #39: an unresolved-but-sensitive-by-name tool

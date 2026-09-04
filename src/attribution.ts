@@ -444,46 +444,34 @@ export function decideAttribution(
   canary: CanaryDetectionResult;
   sensitiveAction: boolean;
 } {
-  try {
-    return decideAttributionUnguarded(actionName, args, canaryMap, spans, sensitivityTable, modelText);
-  } catch (cause) {
-    // #44: collectLeafStrings/hasCircularReference (traversal.ts) are
-    // depth-guarded, but a pathologically deep-but-acyclic tool_args can
-    // still overflow the stack in code this function calls that ISN'T
-    // depth-guarded (e.g. the plain `JSON.stringify(args)` used for
-    // args-canary detection, which recurses natively). Converting that
-    // crash into the same typed, fail-closed error the circular-reference
-    // guard above already uses is strictly better than an uncaught
-    // RangeError taking down the caller.
-    if (cause instanceof RangeError) {
-      throw new AegisAttributionError(
-        `Model returned tool_args too deeply nested or complex to analyze safely: ${cause.message}`
-      );
-    }
-    throw cause;
-  }
-}
-
-function decideAttributionUnguarded(
-  actionName: string,
-  args: unknown,
-  canaryMap: Record<string, string>,
-  spans: Span[],
-  sensitivityTable: SensitivityTable,
-  modelText: string | undefined
-): {
-  verdict: 'allow' | 'block' | 'flag';
-  reason: string;
-  attribution: ProvenanceMatchResult;
-  canary: CanaryDetectionResult;
-  sensitiveAction: boolean;
-} {
   if (hasCircularReference(args)) {
     throw new AegisAttributionError('Model returned tool_args containing a circular reference, which cannot be analyzed.');
   }
 
   const provenanceMatch = argumentProvenanceMatch(args, spans);
-  const argsCanary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
+  // hasCircularReference's cycle check is depth-guarded (TRAVERSAL_MAX_DEPTH,
+  // traversal.ts) for the same DoS reason collectLeafStrings is: a real cycle
+  // is always caught within a handful of steps (bounded by the number of
+  // distinct objects in the cycle), which is what makes capping depth safe
+  // for THAT check. But a pathological "long acyclic chain that only THEN
+  // closes into a cycle" — the back-edge sitting deeper than the depth
+  // budget — is missed by the capped walk, while Node's native
+  // JSON.stringify still detects it (it isn't depth-limited) and throws a
+  // TypeError, not a RangeError. A prior version of this fix only caught
+  // RangeError here, which still let that TypeError escape uncaught —
+  // caught by Copilot review on PR #51. Catching broadly at this single,
+  // narrow call site (rather than guessing at error subtypes) converts any
+  // serialization failure into the same typed, fail-closed error the
+  // circular-reference guard above already uses.
+  let argsSerialized: string;
+  try {
+    argsSerialized = JSON.stringify(args ?? null);
+  } catch (cause) {
+    throw new AegisAttributionError(
+      `Model returned tool_args that could not be serialized for canary detection (too deeply nested, or a circular reference beyond the traversal's cycle-detection budget): ${cause instanceof Error ? cause.message : String(cause)}`
+    );
+  }
+  const argsCanary = canaryDetection(argsSerialized, canaryMap);
   const textCanary = canaryDetection(modelText ?? '', canaryMap);
   const canary: CanaryDetectionResult = {
     triggered: argsCanary.triggered || textCanary.triggered,
