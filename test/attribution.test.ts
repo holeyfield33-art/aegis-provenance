@@ -654,6 +654,14 @@ describe('circular tool_args guard', () => {
 
     expect(() => decideAttribution('search', nodes[0], {}, [])).toThrow(AegisAttributionError);
   });
+
+  // Follow-up Copilot nit on the same PR: the catch around JSON.stringify is
+  // intentionally general, not limited to the deep-nesting/circular cases —
+  // any non-serializable tool_args shape (a BigInt value, a throwing toJSON)
+  // fails the same way and deserves the same fail-closed treatment.
+  it('fails closed with a typed error on tool_args containing a non-JSON-serializable value (BigInt)', () => {
+    expect(() => decideAttribution('search', { amount: 10n }, {}, [])).toThrow(AegisAttributionError);
+  });
 });
 
 // Regression coverage for #39: an unresolved-but-sensitive-by-name tool

@@ -463,12 +463,17 @@ export function decideAttribution(
   // narrow call site (rather than guessing at error subtypes) converts any
   // serialization failure into the same typed, fail-closed error the
   // circular-reference guard above already uses.
+  // The catch is intentionally broad (any JSON.stringify failure, not just
+  // the deep-nesting/out-of-budget-cycle cases above): a BigInt value, a
+  // throwing `toJSON`, or any other non-serializable shape in tool_args
+  // fails the same way and deserves the same fail-closed treatment. The
+  // underlying engine message is included for diagnosis.
   let argsSerialized: string;
   try {
     argsSerialized = JSON.stringify(args ?? null);
   } catch (cause) {
     throw new AegisAttributionError(
-      `Model returned tool_args that could not be serialized for canary detection (too deeply nested, or a circular reference beyond the traversal's cycle-detection budget): ${cause instanceof Error ? cause.message : String(cause)}`
+      `Model returned tool_args that could not be serialized for canary detection: ${cause instanceof Error ? cause.message : String(cause)}`
     );
   }
   const argsCanary = canaryDetection(argsSerialized, canaryMap);
