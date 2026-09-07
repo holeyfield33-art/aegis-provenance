@@ -55,7 +55,19 @@ detail.
   one).
 - **Argument-masking.** Provenance is evaluated **per argument value**, so a
   benign field matching a trusted span cannot mask a sibling field sourced only
-  from an untrusted span.
+  from an untrusted span. This traversal parses JSON embedded in string fields
+  (including double-escaped payloads, depth-guarded) so a value smuggled inside
+  a JSON-stringified sub-field is decomposed and attributed the same way a
+  top-level field is (#41) — this is the same shared, guarded traversal
+  (`src/traversal.ts`) the egress destination extractor uses, so the two can
+  no longer silently disagree about what a call's arguments contain.
+- **Unclassified sensitive tools fail closed.** A tool name that satisfies the
+  sensitivity table (by name pattern or argument content) but has no resolved
+  entry in the egress-contract registry (`tool-contracts.ts`) is blocked
+  outright, with a distinct reason, rather than silently falling back to the
+  generic gates — closing a bypass where an authorized destination elsewhere
+  in the same call could satisfy whole-call intent for an unauthorized sibling
+  destination under an unregistered tool name (#39).
 - **Content-shaped exfiltration on innocuously-named tools.** Arguments
   containing secret-key-shaped names, credential tokens, credential file paths,
   path-traversal sequences, or identity/system-framing override make an action
@@ -68,6 +80,10 @@ detail.
 - **Hidden-instruction use.** Each inert span is framed with a unique canary
   token. A canary surfacing in tool arguments blocks a sensitive action; a
   canary in free-text output is flagged as read-only exfiltration evidence.
+  Canary matching normalizes both sides through the same invisible-character-
+  stripping/homoglyph-folding pass used for provenance matching (#40), so a
+  model reflecting an altered canary (zero-width characters spliced in, a
+  Cyrillic/Greek look-alike substituted for a Latin letter) is still detected.
 - **Frame-delimiter breakout.** Literal inert-frame delimiters inside untrusted
   content are escaped before rendering, so injected content cannot forge a
   "trusted" frame.
@@ -127,6 +143,21 @@ If you build on Aegis, you can rely on the following:
      positive egress authorization.
    - `http_post` transmits to the URL **host(s)** it posts to. An **email** in an
      `http_post` argument is body payload, **not** a destination.
+   - **A sensitive action with no resolved tool-contract is always blocked,
+     never silently deferred (#39).** The sensitivity table (name patterns
+     like `/^send_/`, or content-based classification) and the egress-contract
+     alias map are classifying the same call from two different signals, and
+     they must agree. Before this fix a tool name that satisfied the
+     sensitivity table but wasn't one of the exact aliases in
+     `tool-contracts.ts` resolved to contract `'none'`, indistinguishable from
+     a recognized-but-legitimately-non-egress tool — so the call silently fell
+     back to the generic, whole-call intent gate, which an authorized
+     destination anywhere in the arguments satisfies for the entire call
+     (including an unauthorized sibling field). `decideAttribution` now checks
+     `resolveCanonicalTool` first for any sensitive action and blocks
+     immediately, with a distinct reason, when it resolves to nothing —
+     before evaluating destinations or generic gates. Extending the alias map
+     narrows how often this fires; it never removes the backstop itself.
 
    Extracting a value the tool does not act on would be a false positive, not
    defense-in-depth, so the contract is matched exactly (and kept in lock-step
@@ -154,13 +185,23 @@ These are the things Aegis does **not** protect against in `0.1.x`. State these
 alongside any "launch-ready" claim.
 
 - **Heuristic content classification has gaps.** `contentSensitivityCheck`
-  inspects *raw* argument strings, not their decoded representations. An
-  obfuscated secret name or path-traversal sequence (base64/hex/homoglyph) on a
-  non-name-sensitive tool can evade classification, leaving the action
-  non-sensitive so the provenance gate never engages. The regex patterns are a
-  floor, not a proof. The durable fix is upstream resolution of sensitive
+  matches against decoded/folded representations of each argument value (#19),
+  but the regex patterns themselves are a fixed, necessarily incomplete floor —
+  e.g. GitHub's newer `github_pat_` fine-grained token format is not yet
+  covered (#49/P2). The durable fix is upstream resolution of sensitive
   arguments into host-derived intent markers rather than pattern-matching model
   output; that work is on the roadmap.
+- **Combining-diacritical-mark ("zalgo") obfuscation is not stripped.**
+  `normalizeMatchText`'s NFKC pass folds precomposed/compatibility forms and a
+  fixed homoglyph table, but does not strip Unicode category Mn (combining
+  marks). Untrusted content that intersperses zero-effect combining marks
+  within otherwise-plain text can break literal-substring provenance matching
+  and, in the same way #40 did before its fix, could weaken canary-reflection
+  evidence for this specific obfuscation shape. Tracked as #46 (open); the
+  layered fail-closed defaults elsewhere in the pipeline mean this is not
+  currently a confirmed full bypass of the enforcement gate, but it is a real
+  robustness gap in the provenance/canary *evidence* the receipt trail
+  records.
 - **Receipts are hash-linked, not externally anchored.** The chain is
   tamper-*evident* only against an appender that plays by the rules. Anyone with
   write access to the receipt store can recompute the entire chain. External

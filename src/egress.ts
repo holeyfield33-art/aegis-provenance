@@ -31,8 +31,7 @@
 import type { Span } from './types.js';
 import { foldConfusables, stripInvisible, expandDecodedCandidates } from './normalize.js';
 import { egressContract } from './tool-contracts.js';
-
-const MAX_DEPTH = 8;
+import { collectLeafStrings } from './traversal.js';
 
 // Email + URL shapes. Local, not shared with the oracle by design.
 const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
@@ -110,46 +109,10 @@ function spanMatchForms(value: string): string[] {
   return Array.from(forms);
 }
 
-/**
- * Every string leaf reachable from `value`: descends through objects and
- * arrays, and ALSO parses any string leaf that is itself a JSON object/array
- * and descends into it (arg-smuggling via a stringified or double-escaped
- * payload). Depth- and cycle-guarded. The raw string is always kept too, so a
- * destination that sits in the serialized text is matched even when the JSON
- * does not re-parse.
- */
-function collectLeafStrings(value: unknown, depth = 0, seen: Set<object> = new Set()): string[] {
-  if (depth > MAX_DEPTH || value === null || value === undefined) {
-    return [];
-  }
-  if (typeof value === 'string') {
-    const out = [value];
-    const trimmed = value.trim();
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed && typeof parsed === 'object') {
-          out.push(...collectLeafStrings(parsed, depth + 1, seen));
-        }
-      } catch {
-        // Not valid JSON — the raw string is already captured.
-      }
-    }
-    return out;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return [String(value)];
-  }
-  if (typeof value === 'object') {
-    if (seen.has(value as object)) {
-      return [];
-    }
-    seen.add(value as object);
-    const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
-    return children.flatMap((child) => collectLeafStrings(child, depth + 1, seen));
-  }
-  return [];
-}
+// Leaf-string traversal (JSON-in-string parsing, depth budget, cycle safety)
+// now lives in src/traversal.ts, shared with attribution.ts (#41) — see that
+// module's header for why the two had drifted and why this needed to be one
+// implementation.
 
 // A network destination is authorized at ORIGIN granularity — scheme + host +
 // port — not bare hostname (audit follow-up). Binding the scheme and port stops
